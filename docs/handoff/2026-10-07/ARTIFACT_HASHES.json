@@ -1,0 +1,62 @@
+{
+  "native_runtime": {
+    "path": "artifacts/global-debug-fix-20261007/runtime-passive.nro",
+    "exists": true,
+    "size": 40576056,
+    "sha256": "ad3e2eff3cc0c83939f6187951e5523d4bbf9c176817b6b353e0f11599e75368"
+  },
+  "matching_native_elf": {
+    "path": "artifacts/global-debug-fix-20261007/runtime-passive.elf",
+    "exists": true,
+    "size": 66949864,
+    "sha256": "1bc7a9030c63d6ba9dbecc7400b5d55cf543eff63c462d4ac8f6c8e0a549534b"
+  },
+  "sysbot_nsp": {
+    "path": "artifacts/global-debug-fix-20261007/sys-botbase.nsp",
+    "exists": true,
+    "size": 130709,
+    "sha256": "5485be29787001270af2b4e2491c48d124d04f4d49a8a9a8a0bfb4010830d62b"
+  },
+  "matching_sysbot_elf": {
+    "path": "artifacts/global-debug-fix-20261007/sys-botbase.elf",
+    "exists": true,
+    "size": 4734432,
+    "sha256": "d802fec30e76e9577f65fc970235843002034dbacb6ff690097aae39d9dfd36a"
+  },
+  "steam_sdk_x86": {
+    "path": "artifacts/steamworks-minimal/steam_api.dll",
+    "exists": true,
+    "size": 467968,
+    "sha256": "e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe"
+  },
+  "steam_sdk_x64": {
+    "path": "artifacts/steamworks-minimal/steam_api64.dll",
+    "exists": true,
+    "size": 443904,
+    "sha256": "0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623"
+  },
+  "clean_forest_log": {
+    "path": "artifacts/global-debug-fix-20261007/clean-TheForest.log",
+    "exists": true,
+    "size": 150459,
+    "sha256": "73d129b355b055d2e00a87face358e371d56b8614dc55464f62160ffe3db96fd"
+  },
+  "clean_runtime_log": {
+    "path": "artifacts/global-debug-fix-20261007/clean-autorun_runtime.log",
+    "exists": true,
+    "size": 157054,
+    "sha256": "e13c463685258291f22b0995c27496f1ac5a7e33bb972d75e5248690a0844765"
+  },
+  "dishonored_post_cumulative_log": {
+    "path": "artifacts/post-cumulative-20261007/Dishonored.log",
+    "exists": true,
+    "size": 365538,
+    "sha256": "02d8c8c566ebc447a88b45d1387a41d914c0ef2e1f10f895998a5c15b018b482"
+  },
+  "prior_handoff_archive": {
+    "path": "artifacts/handoffs/NEXT_CHAT_REMOTE_DEBUG_before_migration_20261007.md",
+    "exists": true,
+    "size": 59347,
+    "sha256": "cb1ae0d3454797bb253419dd4aa86f6da1335108c4856c1e102d886f73bc661e"
+  }
+}

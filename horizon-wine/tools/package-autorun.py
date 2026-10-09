@@ -27,7 +27,8 @@ build = horizon_wine / 'build-autorun'
 stage_root = build / 'sd-card'
 stage = stage_root / 'switch/wine'
 marker = re.search(r'nx-wow64-dynarec-(\d+)', (horizon_wine / 'source/runtime.c').read_text()).group(1)
-toolchain = horizon_wine / 'toolchains/llvm-mingw-20260505-ucrt-macos-universal/bin'
+toolchain = Path(os.environ.get('WINE_NX_LLVM_MINGW',
+                 horizon_wine / 'toolchains/llvm-mingw-20260505-ucrt-macos-universal')) / 'bin'
 # The FEX build when there is one, as build-amd64-components.sh names it.
 default_amd64 = next((path for path in (horizon_wine / f'build-switch-amd64/wine-nx-amd64-box64{kind}-mesa-dxvk-vkd3d.zip'
                                         for kind in ('-fex', '')) if path.is_file()),
@@ -52,6 +53,7 @@ def compile_setup(source, output, *libs):
 
 # --- What Wine reads beside the runtime --------------------------------------
 
+assert (root / 'nls/locale.nls').is_file(), 'Wine locale.nls is required for a complete installation'
 shutil.rmtree(build, ignore_errors=True)
 stage.mkdir(parents=True)
 for nls in (root / 'nls').glob('*.nls'):
@@ -67,7 +69,11 @@ licenses = stage / 'licenses'
 licenses.mkdir()
 for source, name in ((root / 'COPYING.LIB', 'Wine-LGPL-2.1.txt'),
                      (horizon_wine / 'vendor/box64/LICENSE', 'Box64-MIT.txt'),
-                     (horizon_wine / 'licenses/libjpeg-turbo.txt', 'libjpeg-turbo.txt')):
+                     (horizon_wine / 'licenses/libjpeg-turbo.txt', 'libjpeg-turbo.txt'),
+                     (horizon_wine / 'licenses/wslay-MIT.txt', 'wslay-MIT.txt'),
+                     (horizon_wine / 'licenses/qrcodegen-MIT.txt', 'qrcodegen-MIT.txt'),
+                     (horizon_wine / 'licenses/liblzma-0BSD.txt', 'liblzma-0BSD.txt'),
+                     (horizon_wine / 'licenses/zstd-BSD.txt', 'zstd-BSD.txt')):
     shutil.copy2(source, licenses / name)
 
 # --- Autorun's setup programs ------------------------------------------------
@@ -76,6 +82,15 @@ drive = stage / 'drive_c'
 # What wineboot registers on a computer and nothing does on the Switch:
 # DirectShow, DirectX Media Objects and the MP3 decoder. The runtime runs it
 # before the first program on a card (source/runtime.c), for every game.
+# Read-only prerequisite probes: ordinary x86/x64 Windows executables. Microsoft
+# redistributables are fetched on the device, never bundled/relicensed here.
+for arch in ('i686', 'x86_64'):
+    output = drive / 'windows/AutorunPrerequisites' / ('probe-x86.exe' if arch == 'i686' else 'probe-x64.exe')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(toolchain / (arch + '-w64-mingw32-clang')), '-Os', '-Wall', '-Wextra', '-Werror',
+                    '-fno-builtin', '-nostdlib', '-Wl,--entry,' + ('_start@0' if arch == 'i686' else 'start'),
+                    '-Wl,--dynamicbase', '-o', str(output), str(tools / 'autorun_prereq_probe.c'),
+                    '-ladvapi32', '-lkernel32', '-lntdll'], check=True)
 compile_setup(tools / 'autorun_setup.c', drive / 'windows/autorun-setup.exe', '-lole32', '-ladvapi32')
 
 # WarCraft III: the game is the player's to copy into its folder; the setup

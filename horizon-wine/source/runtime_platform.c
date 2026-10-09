@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <switch.h>
+#include "system_language.h"
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -132,6 +133,7 @@ void wine_nx_runtime_environment_init(void)
     static int environment_initialized;
 
     if (environment_initialized) return;
+    setenv("WINE_NX_SYSTEM_LOCALE", nx_system_language().locale, 1);
     init_environment();
     environment_initialized = 1;
 }

@@ -32,8 +32,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
 /* The runtime hands the screen's NWindow to one surface at a time
  * (horizon-wine/source/runtime.c); OpenGL and Vulkan take turns with it. */
-extern void *wine_nx_gl_acquire_window( void );
-extern void wine_nx_gl_release_window( void );
+extern void *wine_nx_vk_window( void );
 extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
 
 /* VK_NN_vi_surface, which Wine's Vulkan headers do not describe: mesa-switch's
@@ -102,20 +101,17 @@ static VkResult nx_vulkan_surface_create( struct client_surface *client, const s
 
     TRACE( "hwnd %p, raw %u, instance %p\n", hwnd, client->raw, instance );
 
-    if (!(info.window = wine_nx_gl_acquire_window()))
-    {
-        ERR( "hwnd %p: the screen already has an OpenGL or Vulkan surface\n", hwnd );
-        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
-    }
+    /* The screen itself is taken with the surface's first swapchain
+     * (vulkan.c): until then the driver only asks the window its size. */
+    info.window = wine_nx_vk_window();
     if ((res = wine_nx_vkCreateViSurfaceNN( instance->host.instance, &info, NULL, handle )))
     {
         ERR( "hwnd %p: vkCreateViSurfaceNN failed, res %d\n", hwnd, res );
         nx_log( "[NXVK] hwnd %p: vkCreateViSurfaceNN failed, res %d", hwnd, res );
-        wine_nx_gl_release_window();
         return res;
     }
 
-    nx_log( "[NXVK] hwnd %p: a Vulkan surface has the screen", hwnd );
+    nx_log( "[NXVK] hwnd %p: a Vulkan surface is made; its first swapchain takes the screen", hwnd );
     return VK_SUCCESS;
 }
 

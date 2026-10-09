@@ -42,13 +42,13 @@
 #include "launcher_ui.h"
 #include "launcher_forwarder.h"
 #include "launcher_image.h"
-#include "launcher_update.h"
 #include "launcher_dlls.h"
 #include "launcher_setup.h"
 #include "setup_boot.h"
 #include "launcher_graphics.h"
-#include "autorun_install.h"
 #include "steamgriddb.h"
+#include "steam/steam_ui.h"
+#include "steam/steam_local.h"
 #include "dxvk_releases.h"
 #include "box64_options.h"
 #include "fex_options.h"
@@ -72,7 +72,7 @@
 #define FOOTER_SPACE   38
 
 /* Home and Library's header, laid out after GameHub's at 1280x720. */
-enum shell_tab { SHELL_HOME, SHELL_LIBRARY, SHELL_SETTINGS, SHELL_TABS };
+enum shell_tab { SHELL_HOME, SHELL_LIBRARY, SHELL_STEAM, SHELL_DOWNLOADS, SHELL_SETTINGS, SHELL_TABS };
 #define SHELL_Y        UI_HEADER_CENTRE
 #define SHELL_ICON     30
 #define SHELL_MARGIN   UI_HEADER_MARGIN   /* which Home's content keeps too */
@@ -99,7 +99,7 @@ enum shell_tab { SHELL_HOME, SHELL_LIBRARY, SHELL_SETTINGS, SHELL_TABS };
 enum zone { ZONE_HEADER, ZONE_CONTENT };
 
 /* The icons drawn from assets/ (launcher_icons.h), made once at the size they are shown. */
-enum symbol { SYMBOL_HOME, SYMBOL_LIBRARY, SYMBOL_ADD, SYMBOL_SETTINGS, SYMBOL_COUNT };
+enum symbol { SYMBOL_HOME, SYMBOL_LIBRARY, SYMBOL_STEAM, SYMBOL_DOWNLOADS, SYMBOL_ADD, SYMBOL_SETTINGS, SYMBOL_COUNT };
 
 enum icon_state { ICON_UNKNOWN, ICON_QUEUED, ICON_READY, ICON_MISSING };
 enum art_kind { ART_PORTRAIT, ART_SQUARE, ART_HERO };
@@ -164,9 +164,9 @@ struct launcher
 {
     struct wine_nx_launcher_options *options;
     struct ui ui;
-    struct launcher_update *update;
     struct launcher_dlls *dlls;
     struct launcher_graphics *graphics;
+    char prerequisite_target[512];
 
     struct program programs[LAUNCHER_MAX_ENTRIES];
     int program_count;
@@ -248,6 +248,10 @@ extern int wine_nx_launcher_console_run( const char *drive_c, const char *runtim
  * Platform
  */
 
+/* The last line the launcher logged, for a screen that has to say what came
+ * before a failure when the card no longer takes the log. */
+static char launcher_last_log[120];
+
 static void launcher_log( const char *format, ... )
 {
     char line[600];
@@ -256,6 +260,7 @@ static void launcher_log( const char *format, ... )
     va_start( args, format );
     vsnprintf( line, sizeof(line), format, args );
     va_end( args );
+    if (strncmp( line, "[CARD]", 6 )) snprintf( launcher_last_log, sizeof(launcher_last_log), "%s", line );
     wine_nx_runtime_trace( line );
 }
 
@@ -1289,7 +1294,7 @@ static void draw_battery( struct ui *ui, int x, int cy, int percent, int chargin
     ui_fill( ui, x + 3, y + 3, level, h - 6, charging ? (SDL_Color){ 124, 222, 146, 255 } : line );
 }
 
-static const char *const shell_labels[SHELL_TABS] = { "Home", "Library" };
+static const char *const shell_labels[SHELL_TABS] = { "Home", "Library", "Steam", "Downloads" };
 
 /* How wide a header item is: its icon, and as much of the name as is out. */
 static int shell_width( struct launcher *l, int tab )
@@ -1343,12 +1348,14 @@ static void header_status( void *data, int right, int y )
 
 /* The header over Home and Library: the current view's icon and name, the other
  * views and Add Game as icons, and Settings, the clock and the battery at the right. */
-static void draw_shell( struct launcher *l, int home )
+static void draw_shell_active( struct launcher *l, int home, int active )
 {
     static const struct { enum symbol symbol; const char *label; } tabs[] =
     {
         [SHELL_HOME] = { SYMBOL_HOME, "Home" },
         [SHELL_LIBRARY] = { SYMBOL_LIBRARY, "Library" },
+        [SHELL_STEAM] = { SYMBOL_STEAM, "Steam" },
+        [SHELL_DOWNLOADS] = { SYMBOL_DOWNLOADS, "Downloads" },
     };
     struct ui *ui = &l->ui;
     int x = SHELL_MARGIN, right = ui->width - SHELL_MARGIN, i, width;
@@ -1358,7 +1365,8 @@ static void draw_shell( struct launcher *l, int home )
      * it: the widths below are measured from where they have got to. */
     for (i = SHELL_HOME; i < SHELL_TABS; i++)
     {
-        float target = i == (home ? SHELL_HOME : SHELL_LIBRARY) ? 1.0f : 0.0f;
+        float target = i == active ? 1.0f : 0.0f;
+        if (i == SHELL_STEAM || i == SHELL_DOWNLOADS) target = 1.0f;
 
         if (!ui->animations) l->label_open[i] = target;
         else l->label_open[i] += (target - l->label_open[i]) * 0.22f;
@@ -1376,7 +1384,7 @@ static void draw_shell( struct launcher *l, int home )
     {
         int target_x = 0, target_w = 0, at = SHELL_MARGIN;
 
-        for (i = SHELL_HOME; i <= SHELL_LIBRARY; i++)
+        for (i = SHELL_HOME; i <= SHELL_DOWNLOADS; i++)
         {
             int item_w = shell_width( l, i );
 
@@ -1410,7 +1418,7 @@ static void draw_shell( struct launcher *l, int home )
                                 (SDL_Color){ 244, 247, 250, 255 } );
         }
     }
-    for (i = SHELL_HOME; i <= SHELL_LIBRARY; i++)
+    for (i = SHELL_HOME; i <= SHELL_DOWNLOADS; i++)
     {
         int focused = l->zone == ZONE_HEADER && l->header_focus == i;
         float lit = focused ? 1.0f : l->label_open[i];
@@ -1435,6 +1443,11 @@ static void draw_shell( struct launcher *l, int home )
 }
 
 /* Launcher mark on Home and settings screens. */
+static void draw_shell( struct launcher *l, int home )
+{
+    draw_shell_active( l, home, home ? SHELL_HOME : SHELL_LIBRARY );
+}
+
 static void draw_footprint( struct launcher *l )
 {
     struct ui *ui = &l->ui;
@@ -1763,6 +1776,12 @@ enum program_row
 };
 
 static int file_browser_pick( struct launcher *l, char *target, size_t size );
+static int steam_register_executable( void *context, const char *path, const char *title );
+static void steam_shell_header( void *context, int section, int focused );
+static int steam_shell_hit( void *context, int x, int y );
+static int steam_launch_prerequisite(void *,const char *);
+static int steam_unregister_directory( void *, const char * );
+static int steam_choose_executable( void *context, char *path, unsigned int size );
 static int pick_forwarder_icon( void *opaque, char *target, size_t size );
 static void save_look( struct launcher *l );
 
@@ -1804,12 +1823,15 @@ static int confirm_forwarder( struct launcher *l )
     struct ui *ui = &l->ui;
     char message[320];
 
-    snprintf( message, sizeof(message),
-              "A forwarder is installed as an application. Consoles have been banned for homebrew "
-              "in that list.\n\nUse emuMMC only. %s",
-              l->options->emummc > 0 ? "This console is on emuMMC." :
-              l->options->emummc == 0 ? "This console is NOT on emuMMC." :
-              "Atmosphere did not say which this console is on." );
+    const char *warning = "The HOME menu entry is installed as an application. Consoles have been banned for "
+                          "homebrew in that list. Use emuMMC only.";
+    const char *where = l->options->emummc > 0 ? "This console is on emuMMC." :
+                        l->options->emummc == 0 ? "This console is NOT on emuMMC." :
+                        "Atmosphere did not say which this console is on.";
+
+    /* Put together from parts, so each part is translated before it is. */
+    snprintf( message, sizeof(message), "%s\n\n%s", ui->translate ? ui->translate( warning ) : warning,
+              ui->translate ? ui->translate( where ) : where );
     return ui_confirm( ui, "Install forwarder", message, "Install" );
 }
 
@@ -1827,7 +1849,7 @@ static void make_forwarder( struct launcher *l )
      * them takes a moment, and nothing is drawn while it does. */
     ui_start_screen( ui );
     ui_background( ui );
-    ui_header_back( ui, "Install forwarder", "Autorun" );
+    ui_header_back( ui, "Install forwarder", "CorkDeck" );
     ui_text_centered( ui, ui->large, ui->width / 2, ui->height / 2 - 30, "Installing...", ui->value );
     ui_present( ui );
 
@@ -1841,7 +1863,7 @@ static void make_forwarder( struct launcher *l )
         ui_start_screen( ui );
         return;
     }
-    ui_message( ui, "Installed", "Autorun is on the home menu." );
+    ui_message( ui, "Installed", "CorkDeck is on the home menu." );
     ui_start_screen( ui );
 }
 
@@ -1959,13 +1981,22 @@ static int prepare_program_graphics( struct launcher *l, struct program *p )
 }
 
 
+/* Set by the shell: draws the screen a program starts behind. */
+static void (*launcher_start_screen)( struct launcher *l, struct program *p );
+
 static int start_program( struct launcher *l, struct program *p, char *target, size_t size )
 {
     struct ui *ui = &l->ui;
     char path[512];
 
+    launcher_log( "[SHELL] Play: %s", p->path );
     if (!file_exists( p->path ) || l->options->machine_of( p->path, &p->machine ))
     {
+        struct stat st;
+        int error = stat( p->path, &st ) ? errno : 0;
+
+        launcher_log( "[SHELL] Play refused: the file %s (errno %d)", error ? "cannot be asked about" :
+                      "is there but is not a program this build starts", error );
         p->missing = 1;
         ui_message( ui, "Game unavailable", "The executable is missing or is not supported by this build." );
         return 0;
@@ -1978,15 +2009,34 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
         return 0;
     }
     /* Autorun ships no Windows DLLs: a card without them is offered them here. */
-    if (!launcher_dlls_ready( l->dlls )) return 0;
+    if (!launcher_dlls_ready( l->dlls ))
+    {
+        launcher_log( "[SHELL] Play stopped: the Windows DLLs are not there" );
+        return 0;
+    }
+    {
+        int result = steam_local_prepare( l->options->runtime_dir, p->path, p->machine );
+        if (result == STEAM_LOCAL_PAYLOAD_MISSING)
+            launcher_log( "[STEAM LOCAL] optional component not installed; keeping original SDK" );
+        else if (result > STEAM_LOCAL_READY)
+        {
+            ui_message( ui, "Local Steamworks", steam_local_error( result ) );
+            return 0;
+        }
+    }
     if (p->settings.d3d != LAUNCHER_D3D_WINE && !prepare_program_graphics( l, p )) return 0;
     p->missing = 0;
     p->launched_order = l->catalog.next_order++;
     save_library( l );
 
-    ui_background( ui );
-    ui_text_centered( ui, ui->large, ui->width / 2, (ui->height - TTF_FontHeight( ui->large )) / 2,
-                      "Starting game...", ui->value );
+    /* The last thing the shell shows: the program that is starting. */
+    if (launcher_start_screen) launcher_start_screen( l, p );
+    else
+    {
+        ui_background( ui );
+        ui_text_centered( ui, ui->large, ui->width / 2, (ui->height - TTF_FontHeight( ui->large )) / 2,
+                          "Starting game...", ui->value );
+    }
     ui->hide_overlays = 1;
     ui_present( ui );
 
@@ -2973,8 +3023,8 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
 enum settings_row
 {
     SET_HIDDEN, SET_HIDE_MISSING, SET_DXVK_ON_ADD, SET_VERBOSE, SET_PROFILE, SET_WINDOWS, SET_SWKBD,
-    SET_CONTROLS, SET_STEAMGRIDDB,
-    SET_DLLS, SET_UPDATE, SET_SETUP, SET_REOPEN, SET_MAKE_MAIN,
+    SET_CONTROLS, SET_STEAMGRIDDB, SET_STEAM,
+    SET_DLLS, SET_SETUP, SET_REOPEN, SET_MAKE_MAIN,
 #ifdef WINE_NX_SWAP_POC
     SET_SWAP_SIZE,
 #endif
@@ -3004,6 +3054,10 @@ static void save_look( struct launcher *l )
 
 static const struct { const char *name, *by; } credits[] =
 {
+    { "CORKDECK", NULL },
+    { "CorkDeck", "Maj0ra'sMask  /  the shell, the settings and this fork" },
+    { "Autorun", "ticoverse.com  /  the project this fork grew from" },
+    { "Manrope", "Mikhail Sharanda and contributors  /  OFL-1.1" },
     { "RUNTIME & TRANSLATION", NULL },
     { "Wine", "WineHQ  /  LGPL-2.1+" },
     { "Box64", "ptitSeb  /  MIT" },
@@ -3292,7 +3346,7 @@ static void credits_screen( struct launcher *l )
 {
     struct ui *ui = &l->ui;
     struct ui_input input;
-    const SDL_Color background = { 5, 8, 10, 255 }, accent = { 151, 200, 181, 255 };
+    const SDL_Color background = { 12, 17, 23, 255 }, accent = { 26, 159, 255, 255 };
     const int logo_width = 320, title_gap = 256, entry_height = 92, section_height = 132;
     int logo_height = 0, width, height, y, end_y = ui->height / 2 - 50 + title_gap;
     int old_hide_overlays = ui->hide_overlays, done = 0, manual = 0;
@@ -3351,8 +3405,8 @@ static void credits_screen( struct launcher *l )
         y = ui->height / 2 - 50 - (int)scroll;
         if (y > -100)
         {
-            ui_text_centered( ui, ui->large, ui->width / 2, y, "Autorun", ui->value );
-            ui_text_centered( ui, ui->normal, ui->width / 2, y + 52, "People and projects behind the port", ui->dim );
+            ui_text_centered( ui, ui->large, ui->width / 2, y, "CorkDeck", ui->value );
+            ui_text_centered( ui, ui->normal, ui->width / 2, y + 52, "People and projects behind it", ui->dim );
         }
         y += title_gap;
         for (i = 0; i < CREDIT_COUNT; i++)
@@ -3386,14 +3440,14 @@ static void credits_screen( struct launcher *l )
                 SDL_SetTextureAlphaMod( l->logo, 255 );
                 SDL_RenderCopy( ui->renderer, l->logo, NULL, &rect );
             }
-            ui_text_centered( ui, ui->large, ui->width / 2, y + logo_height + 16, "Autorun", ui->value );
-            ui_text_centered( ui, ui->normal, ui->width / 2, y + logo_height + 64, "ticoverse.com", accent );
+            ui_text_centered( ui, ui->large, ui->width / 2, y + logo_height + 16, "CorkDeck", ui->value );
+            ui_text_centered( ui, ui->normal, ui->width / 2, y + logo_height + 64, "A fork of Autorun (ticoverse.com)", accent );
         }
-        ui_gradient( ui, 0, 0, ui->width, 80, background, (SDL_Color){ 5, 8, 10, 0 }, 0 );
-        ui_gradient( ui, 0, ui->height - 80, ui->width, 80, (SDL_Color){ 5, 8, 10, 0 }, background, 0 );
+        ui_gradient( ui, 0, 0, ui->width, 80, background, (SDL_Color){ 12, 17, 23, 0 }, 0 );
+        ui_gradient( ui, 0, ui->height - 80, ui->width, 80, (SDL_Color){ 12, 17, 23, 0 }, background, 0 );
         ui_fade( ui );
         if (finished && now - finished > 4600)
-            ui_fill( ui, 0, 0, ui->width, ui->height, (SDL_Color){ 5, 8, 10, (now - finished - 4600) * 255 / 400 } );
+            ui_fill( ui, 0, 0, ui->width, ui->height, (SDL_Color){ 12, 17, 23, (now - finished - 4600) * 255 / 400 } );
         ui->scrolling_text = !manual || speed != 0;
         ui_present( ui );
         ui_wait( ui );
@@ -3429,9 +3483,9 @@ static void settings_menu( struct launcher *l )
             [SET_WINDOWS] = SET_SECTION_DEFAULTS, [SET_CONTROLS] = SET_SECTION_DEFAULTS,
             [SET_SWKBD] = SET_SECTION_DEFAULTS,
             [SET_STEAMGRIDDB] = SET_SECTION_ARTWORK,
+            [SET_STEAM] = SET_SECTION_LIBRARY,
             [SET_REOPEN] = SET_SECTION_SYSTEM,
             [SET_DLLS] = SET_SECTION_SYSTEM,
-            [SET_UPDATE] = SET_SECTION_SYSTEM,
             [SET_SETUP] = SET_SECTION_SYSTEM,
             [SET_MAKE_MAIN] = SET_SECTION_SYSTEM,
 #ifdef WINE_NX_SWAP_POC
@@ -3503,11 +3557,6 @@ static void settings_menu( struct launcher *l )
             rows[SET_DLLS].help = "The Windows files games run on, from Autorun's DLL repository: download, "
                                   "update and verify them.";
         }
-        snprintf( rows[SET_UPDATE].label, sizeof(rows[0].label), "Check for update" );
-        rows[SET_UPDATE].kind = UI_ROW_ACTION;
-        rows[SET_UPDATE].adjustable = 0;
-        rows[SET_UPDATE].disabled = !l->update;
-        rows[SET_UPDATE].help = "Official Autorun releases, changelog and installation. Games and settings are preserved.";
         snprintf( rows[SET_SETUP].label, sizeof(rows[0].label), "Quick setup" );
         rows[SET_SETUP].kind = UI_ROW_ACTION;
         rows[SET_SETUP].adjustable = 0;
@@ -3520,7 +3569,7 @@ static void settings_menu( struct launcher *l )
                                 "A forwarder made by sphaira cannot do it and stops the console.";
         snprintf( rows[SET_MAKE_MAIN].label, sizeof(rows[0].label), "Make an Autorun forwarder" );
         snprintf( rows[SET_MAKE_MAIN].value, sizeof(rows[0].value), "%s",
-                  l->options->install_forwarder ? "Autorun" : "Unavailable" );
+                  l->options->install_forwarder ? "CorkDeck" : "Unavailable" );
         rows[SET_MAKE_MAIN].help = "Installs the 39-bit Autorun forwarder. Fixed-address Win32 games also "
                                    "require the Atmosphere low-address patch. Use emuMMC only.";
         rows[SET_MAKE_MAIN].adjustable = 0;
@@ -3544,6 +3593,10 @@ static void settings_menu( struct launcher *l )
         rows[SET_SWKBD].on = !!l->options->swkbd_auto;
         rows[SET_SWKBD].help = "Opens by itself when a text field takes focus. Off leaves it to Minus + the "
                                "right stick click, which opens it in any program.";
+        snprintf( rows[SET_STEAM].label, sizeof(rows[0].label), "Steam settings" );
+        rows[SET_STEAM].kind = UI_ROW_ACTION;
+        rows[SET_STEAM].adjustable = 0;
+        rows[SET_STEAM].help = "Link your Steam account, select download language, save/unlock the encrypted session or log out.";
         snprintf( rows[SET_CREDITS].label, sizeof(rows[0].label), "Credits" );
         rows[SET_CREDITS].kind = UI_ROW_ACTION;
         rows[SET_CREDITS].help = "People and projects behind Autorun.";
@@ -3564,6 +3617,14 @@ static void settings_menu( struct launcher *l )
         switch (i)
         {
         case SET_HIDDEN: l->show_hidden = !l->show_hidden; break;
+        case SET_STEAM:
+            if (action == UI_ACTION_CHOOSE)
+            {
+                const struct steam_launcher_adapter adapter = { l, steam_register_executable, steam_choose_executable, steam_unregister_directory, steam_shell_header, steam_shell_hit, steam_launch_prerequisite };
+                steam_ui_set_launcher( &adapter );
+                steam_ui_settings( ui, l->options->runtime_dir );
+            }
+            break;
         case SET_HIDE_MISSING: l->hide_missing = !l->hide_missing; break;
         /* The runtime keeps these: it owns the settings file and writes every
          * one of them at once when the launcher closes. */
@@ -3574,10 +3635,6 @@ static void settings_menu( struct launcher *l )
         case SET_REOPEN: l->options->reopen_launcher = !l->options->reopen_launcher; break;
         case SET_DLLS:
             if (action == UI_ACTION_CHOOSE) launcher_dlls_open( l->dlls );
-            ui_start_screen( ui );
-            break;
-        case SET_UPDATE:
-            if (action == UI_ACTION_CHOOSE) launcher_update_open( l->update );
             ui_start_screen( ui );
             break;
         case SET_SETUP:
@@ -3996,6 +4053,97 @@ static int run_once( struct launcher *l, char *target, size_t size )
     return start_program( l, &program, target, size );
 }
 
+/* Steam ends at files and catalog registration. Execution uses the existing
+ * describe/save/settings functions, exactly as manually added programs do. */
+static int steam_choose_executable( void *context, char *path, unsigned int size )
+{
+    return file_browser_pick( context, path, size );
+}
+/* Steam metadata must not persist implicit launch defaults. In particular,
+ * writing all settings here would suppress the normal first-add renderer rule. */
+static int steam_save_title( struct launcher *l, struct program *p, const char *title )
+{
+    struct launcher_kv kv;
+    char path[768];
+
+    if (!launcher_program_settings_path( l->options->runtime_dir, p->path, path, sizeof(path) ) ||
+        !launcher_kv_load( &kv, path ) || !launcher_kv_set( &kv, "title", title ) ||
+        !launcher_kv_save( &kv, path )) return 0;
+    load_program_settings( l, p );
+    return 1;
+}
+static void steam_shell_header( void *context, int section, int focused )
+{
+    struct launcher *l = context;
+    int zone = l->zone, focus = l->header_focus;
+    l->zone = focused ? ZONE_HEADER : ZONE_CONTENT; l->header_focus = section;
+    draw_shell_active( l, 0, section == SHELL_DOWNLOADS ? SHELL_DOWNLOADS : SHELL_STEAM );
+    l->zone = zone; l->header_focus = focus;
+}
+static int steam_shell_hit( void *context, int x, int y )
+{
+    struct launcher *l = context;
+    SDL_Point point = { x, y };
+    int i;
+    for (i = 0; i < SHELL_TABS; ++i)
+        if (SDL_PointInRect( &point, &l->shell_hits[i] )) return i;
+    return -1;
+}
+
+static int steam_register_executable( void *context, const char *path, const char *title )
+{
+    struct launcher *l = context;
+    struct program program;
+    int index = find_program( l, path );
+    if (index >= 0)
+    {
+        struct program *existing = &l->programs[index];
+        if (title && title[0] && !existing->settings.title[0])
+        {
+            if (!steam_save_title( l, existing, title )) return 0;
+            if (!save_library(l)) return 0;
+            rebuild_visible(l,index);rebuild_history(l,index);
+        }
+        return 1;
+    }
+    if (l->program_count >= LAUNCHER_MAX_ENTRIES || !describe_program( l, &program, path )) return 0;
+    if (title && title[0] && !program.settings.title[0])
+    {
+        if (!steam_save_title( l, &program, title )) return 0;
+    }
+    index = l->program_count;
+    program.added = 1;
+    program.catalog_id = l->catalog.next_id;
+    program.added_order = l->catalog.next_order;
+    l->programs[l->program_count++] = program;
+    if (!save_library( l )) { l->program_count--; return 0; }
+    apply_new_game_renderer( l, &l->programs[index] );
+    rebuild_visible( l, index );
+    rebuild_history( l, index );
+    return 1;
+}
+static int steam_launch_prerequisite(void *context,const char *path)
+{
+    struct launcher *l=context;
+    struct program program;
+    if(l->prerequisite_target[0] || !describe_program(l,&program,path))return 0;
+    snprintf(l->prerequisite_target,sizeof(l->prerequisite_target),"%s",path);
+    launcher_log("[PREREQUISITES] queued ordinary Windows executable");
+    return 1;
+}
+static int steam_unregister_directory( void *context, const char *directory )
+{
+    struct launcher *l = context;
+    unsigned char changed[LAUNCHER_MAX_ENTRIES] = {0};
+    size_t len = strlen(directory);
+    int i;
+    for (i = 0; i < l->program_count; ++i)
+        if (!l->programs[i].removed && !strncmp(l->programs[i].path,directory,len) && l->programs[i].path[len] == '/')
+        { l->programs[i].removed = 1; changed[i] = 1; }
+    if (!save_library(l))
+    { for (i = 0; i < l->program_count; ++i) if (changed[i]) l->programs[i].removed = 0; return 0; }
+    rebuild_visible(l,-1);rebuild_history(l,-1);return 1;
+}
 static int add_game( struct launcher *l )
 {
     struct program program;
@@ -4141,6 +4289,18 @@ static int run_library( struct launcher *l, char *target, size_t size )
     ui_start_screen( ui );
     while (ui_begin_frame( ui ))
     {
+        if(l->prerequisite_target[0]) {
+            struct program prerequisite;
+            char requested[512];
+            snprintf(requested,sizeof(requested),"%s",l->prerequisite_target);
+            l->prerequisite_target[0]=0;
+            if(describe_program(l,&prerequisite,requested)) {
+                /* Only this transient installer/probe uses Wine graphics. No
+                 * game settings, global launch defaults or catalog additions. */
+                prerequisite.settings.d3d=LAUNCHER_D3D_WINE;
+                if(start_program(l,&prerequisite,target,size))return 1;
+            }
+        }
         struct grid g;
         int previous = current_index( l, home ), previous_home = home;
         int previous_zone = l->zone, previous_header = l->header_focus;
@@ -4225,6 +4385,18 @@ static int run_library( struct launcher *l, char *target, size_t size )
                     home = to_home;
                     /* The view changes under it; what the D-pad is on does not,
                      * so the next press still moves along the header. */
+                    input.button = UI_NONE;
+                    break;
+                }
+                case SHELL_STEAM:
+                case SHELL_DOWNLOADS:
+                {
+                    int destination = steam_ui_library( ui, l->options->runtime_dir, l->header_focus == SHELL_DOWNLOADS );
+                    if (destination == SHELL_HOME || destination == SHELL_LIBRARY)
+                    { home = destination == SHELL_HOME; l->header_focus = destination; }
+                    else if (destination == SHELL_SETTINGS) settings_menu( l );
+                    rebuild_lists( l, keep );
+                    ui_start_screen( ui );
                     input.button = UI_NONE;
                     break;
                 }
@@ -4349,7 +4521,7 @@ static int run_library( struct launcher *l, char *target, size_t size )
             case UI_PLUS:
             {
                 static const char *const items[] = { "Add game", "Run a program once", "Exit Autorun" };
-                int chosen = ui_menu( ui, "Autorun", items, 3, 0 );
+                int chosen = ui_menu( ui, "CorkDeck", items, 3, 0 );
 
                 ui_start_screen( ui );
                 if (chosen == 1)
@@ -4437,13 +4609,15 @@ static void preload_art( struct launcher *l )
     }
 }
 
-/* What runs between frames: the release check and the DLL check. */
+#include "shell/shell.inc"
+
+/* What runs between frames: the DLL check and the Steam service. */
 static void background_tick( void *data )
 {
     struct launcher *l = data;
 
-    launcher_update_tick( l->update );
     launcher_dlls_tick( l->dlls );
+    steam_ui_tick( &l->ui, l->options->runtime_dir );
 }
 
 int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target, size_t target_size )
@@ -4469,8 +4643,16 @@ int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target
      * that froze a console said nothing between the settings and its first
      * frame, and the log has to name the call that did not return. */
     launcher_log( "[LAUNCHER] bringing the screen up: the shared font" );
-    if (!launcher_platform_font( &font, &font_size ) ||
-        !ui_init( &l->ui, font, font_size, 1 ))
+    {
+        /* CorkDeck's own face (assets/fonts, built into the program); the
+         * console's shared font only when it could not be opened. */
+        extern const unsigned char corkdeck_font[];
+        extern const size_t corkdeck_font_size;
+
+        if (ui_init( &l->ui, corkdeck_font, corkdeck_font_size, 1 )) font = corkdeck_font;
+    }
+    if (!font && (!launcher_platform_font( &font, &font_size ) ||
+        !ui_init( &l->ui, font, font_size, 1 )))
     {
         launcher_platform_font_release();
         /* libnx's console cannot draw once EGL has had the screen. */
@@ -4512,6 +4694,8 @@ int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target
         {
             [SYMBOL_HOME] = { &icon_gamepad_modern, SHELL_ICON },
             [SYMBOL_LIBRARY] = { &icon_grid, SHELL_ICON - 4 },
+            [SYMBOL_STEAM] = { &icon_gamepad_modern, SHELL_ICON - 4 },
+            [SYMBOL_DOWNLOADS] = { &icon_download, SHELL_ICON - 4 },
             [SYMBOL_ADD] = { &icon_plus, SHELL_ICON - 4 },
             [SYMBOL_SETTINGS] = { &icon_sliders, SHELL_ICON - 4 },
         };
@@ -4544,19 +4728,19 @@ int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target
         if (!strcasecmp( p->path, target ) || !strcasecmp( p->dos, target )) l->history_selection = i;
     }
     preload_art( l );
-    if (!autorun_install_finish( options->runtime_dir ))
-        ui_toast( &l->ui, "The update recovery files could not be cleared.", 5000 );
-    l->update = launcher_update_create( &l->ui, options->runtime_dir, options->schedule_restart );
     l->dlls = launcher_dlls_create( &l->ui, options->runtime_dir );
     l->graphics = launcher_graphics_create( &l->ui, options->runtime_dir );
     l->ui.background_tick = background_tick;
     l->ui.background_data = l;
+    {
+        const struct steam_launcher_adapter adapter = { l, steam_register_executable, steam_choose_executable, steam_unregister_directory, steam_shell_header, steam_shell_hit, steam_launch_prerequisite };
+        steam_ui_set_launcher( &adapter );
+        steam_ui_prepare( options->runtime_dir );
+    }
     offer_quick_setup( l );
     if (options->launch_error) ui_message( &l->ui, "Game unavailable", options->launch_error );
-    ret = l->ui.running ? run_library( l, target, target_size ) : 0;
+    ret = l->ui.running ? shell_run( l, target, target_size ) : 0;
     l->ui.background_tick = NULL;
-    launcher_update_destroy( l->update );
-    l->update = NULL;
     launcher_dlls_destroy( l->dlls );
     l->dlls = NULL;
     launcher_graphics_destroy( l->graphics );
@@ -4568,6 +4752,7 @@ int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target
     }
     launcher_log( "[LAUNCHER] %s; %d icons shown, %d programs without one", ret ? "starting a program" : "closed",
                   added, missing );
+    steam_ui_shutdown();
     stop_icons( l );
     for (i = 0; i < SYMBOL_COUNT; i++)
         if (l->symbols[i]) SDL_DestroyTexture( l->symbols[i] );

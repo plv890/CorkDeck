@@ -1128,6 +1128,30 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
 }
 
 #if defined(__SWITCH__) && defined(__aarch64__)
+void horizon_wait_context_to_server( struct context_data contexts[2], CONTEXT *context )
+{
+    void *wow = get_wow_context( context );
+
+    memset( contexts, 0, 2 * sizeof(*contexts) );
+    context_to_server( &contexts[0], native_machine, context, native_machine );
+    if (wow)
+        context_to_server( &contexts[1], main_image_info.Machine, wow, main_image_info.Machine );
+    else if (main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64 && is_arm64ec())
+        context_to_server( &contexts[1], main_image_info.Machine, context, native_machine );
+    /* A native-only thread has no x86 registers. Do not synthesize them. */
+}
+
+void horizon_wait_context_from_server( CONTEXT *context, struct context_data contexts[2] )
+{
+    void *wow = get_wow_context( context );
+
+    context_from_server( context, &contexts[0], native_machine );
+    if (contexts[1].machine && wow)
+        context_from_server( wow, &contexts[1], main_image_info.Machine );
+    else if (contexts[1].machine && main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64 && is_arm64ec())
+        context_from_server( context, &contexts[1], native_machine );
+}
+
 void horizon_wait_suspend_arm64ec(void)
 {
     CHPE_V2_CPU_AREA_INFO *area = NtCurrentTeb()->ChpeV2CpuAreaInfo;

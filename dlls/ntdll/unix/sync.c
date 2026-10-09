@@ -77,6 +77,7 @@
 #include "unix_private.h"
 
 #ifdef __SWITCH__
+#include "../../../horizon-wine/source/performance_wine.h"
 #define munmap horizon_munmap
 #endif
 
@@ -2339,8 +2340,21 @@ NTSTATUS WINAPI NtQueryTimer( HANDLE handle, TIMER_INFORMATION_CLASS class,
 /******************************************************************
  *		NtWaitForMultipleObjects (NTDLL.@)
  */
-NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WAIT_TYPE type,
-                                          BOOLEAN alertable, const LARGE_INTEGER *timeout )
+#ifdef __SWITCH__
+static NTSTATUS nx_perf_impl_NtWaitForMultipleObjects(DWORD count, const HANDLE *handles, WAIT_TYPE type, BOOLEAN alertable, const LARGE_INTEGER *timeout);
+NTSTATUS WINAPI NtWaitForMultipleObjects(DWORD count, const HANDLE *handles, WAIT_TYPE type, BOOLEAN alertable, const LARGE_INTEGER *timeout)
+{
+    struct nx_perf_token t = nx_perf_wine_begin(NX_PERF_WAIT);
+    NTSTATUS status = nx_perf_impl_NtWaitForMultipleObjects(count, handles, type, alertable, timeout);
+    if (t.tick) wine_nx_perf_end(t, NX_PERF_WAIT,
+        t.tid,
+        (uintptr_t)__builtin_return_address(0), (int)status);
+    return status;
+}
+static NTSTATUS nx_perf_impl_NtWaitForMultipleObjects(DWORD count, const HANDLE *handles, WAIT_TYPE type, BOOLEAN alertable, const LARGE_INTEGER *timeout)
+#else
+NTSTATUS WINAPI NtWaitForMultipleObjects(DWORD count, const HANDLE *handles, WAIT_TYPE type, BOOLEAN alertable, const LARGE_INTEGER *timeout)
+#endif
 {
     union select_op select_op;
     UINT i, flags = SELECT_INTERRUPTIBLE;
@@ -2473,7 +2487,21 @@ extern void svcSleepThread( int64_t nano );
 /******************************************************************
  *		NtDelayExecution (NTDLL.@)
  */
-NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )
+#ifdef __SWITCH__
+static NTSTATUS nx_perf_impl_NtDelayExecution(BOOLEAN alertable, const LARGE_INTEGER *timeout);
+NTSTATUS WINAPI NtDelayExecution(BOOLEAN alertable, const LARGE_INTEGER *timeout)
+{
+    struct nx_perf_token t = nx_perf_wine_begin(NX_PERF_DELAY);
+    NTSTATUS status = nx_perf_impl_NtDelayExecution(alertable, timeout);
+    if (t.tick) wine_nx_perf_end(t, NX_PERF_DELAY,
+        t.tid,
+        (uintptr_t)__builtin_return_address(0), (int)status);
+    return status;
+}
+static NTSTATUS nx_perf_impl_NtDelayExecution(BOOLEAN alertable, const LARGE_INTEGER *timeout)
+#else
+NTSTATUS WINAPI NtDelayExecution(BOOLEAN alertable, const LARGE_INTEGER *timeout)
+#endif
 {
     unsigned int status = STATUS_SUCCESS;
 
@@ -2554,7 +2582,21 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
 /******************************************************************************
  *              NtQueryPerformanceCounter (NTDLL.@)
  */
-NTSTATUS WINAPI NtQueryPerformanceCounter( LARGE_INTEGER *counter, LARGE_INTEGER *frequency )
+#ifdef __SWITCH__
+static NTSTATUS nx_perf_impl_NtQueryPerformanceCounter(LARGE_INTEGER *counter, LARGE_INTEGER *frequency);
+NTSTATUS WINAPI NtQueryPerformanceCounter(LARGE_INTEGER *counter, LARGE_INTEGER *frequency)
+{
+    struct nx_perf_token t = nx_perf_wine_begin(NX_PERF_QPC);
+    NTSTATUS status = nx_perf_impl_NtQueryPerformanceCounter(counter, frequency);
+    if (t.tick) wine_nx_perf_end(t, NX_PERF_QPC,
+        t.tid,
+        (uintptr_t)__builtin_return_address(0), (int)status);
+    return status;
+}
+static NTSTATUS nx_perf_impl_NtQueryPerformanceCounter(LARGE_INTEGER *counter, LARGE_INTEGER *frequency)
+#else
+NTSTATUS WINAPI NtQueryPerformanceCounter(LARGE_INTEGER *counter, LARGE_INTEGER *frequency)
+#endif
 {
     counter->QuadPart = monotonic_counter();
     if (frequency) frequency->QuadPart = TICKSPERSEC;

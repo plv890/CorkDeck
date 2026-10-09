@@ -1,0 +1,128 @@
+{
+  "checkpoint_date_local": "2026-10-07",
+  "timezone": "Asia/Tbilisi",
+  "scope": "last verified bench state; documentation migration did not contact or control the console",
+  "workspace": "D:\\autorun fork",
+  "repository": "D:\\autorun fork\\autorun",
+  "branch": "feature/remote-switch-broker",
+  "head": "737a2505b4f91b272f0d951d51bf3dab80fef96d",
+  "dirty_worktree": true,
+  "do_not_reset": true,
+  "console": {
+    "host": "192.168.70.59",
+    "last_verified_screen": "DBI FTP Browse SD",
+    "active_title": "03DB117EE17B6000",
+    "autorun_closed": true,
+    "control_port": 6000,
+    "foreground_ftp_port": 5000,
+    "http_key_from_last_autorun_run_expired": true,
+    "background_ftp_5001_disabled": true,
+    "gdb_original_config_restored": true,
+    "user_reboot_after_restore_confirmed": true,
+    "last_gdb_connect": "timeout; inaccessible from PC; listener state not independently proven",
+    "evidence": "artifacts/global-debug-fix-20261007/clean-forest-recovery.json"
+  },
+  "native_runtime": {
+    "revision": "2026.10.07-8",
+    "size": 40576056,
+    "sha256": "ad3e2eff3cc0c83939f6187951e5523d4bbf9c176817b6b353e0f11599e75368",
+    "sd_path": "/switch/wine/wine-nx-runtime.nro",
+    "elf": "artifacts/global-debug-fix-20261007/runtime-passive.elf",
+    "journal": "artifacts/global-debug-fix-20261007/native-installation.json"
+  },
+  "sysbot": {
+    "version_string": "2.5",
+    "ar_protocol_version": 1,
+    "size": 130709,
+    "sha256": "5485be29787001270af2b4e2491c48d124d04f4d49a8a9a8a0bfb4010830d62b",
+    "sd_path": "/atmosphere/contents/430000000000000B/exefs.nsp",
+    "backup": "/atmosphere/contents/430000000000000B/exefs.nsp.before-fs-isolation-20261007",
+    "reboot_after_install_confirmed": true,
+    "hardware_recovery_route_passed": true,
+    "journal": "artifacts/global-debug-fix-20261007/fs-installation.json"
+  },
+  "steam_sdk": {
+    "files": [
+      {
+        "file": "steam_api64.dll",
+        "bytes": 443904,
+        "sha256": "0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623",
+        "architecture": "x86_64"
+      },
+      {
+        "file": "steam_api.dll",
+        "bytes": 467968,
+        "sha256": "e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe",
+        "architecture": "i686"
+      }
+    ],
+    "global_readback_journal": "artifacts/clock-language-20261007/installation.json",
+    "adjacent_game_migration": "guarded preparer on next launch, not all games already migrated"
+  },
+  "profile": {
+    "cpu_worker_policy": 4,
+    "shader_ram_budget_mib": 32,
+    "shader_ram_slots": 512,
+    "shader_ram_max_entry_mib": 1,
+    "fex_l2_enabled": true,
+    "fex_tso": 1,
+    "persistent_fex_disk_cache_implemented": false,
+    "dxvk_compiler_workers": 2,
+    "dxvk_gpl": "True",
+    "dxvk_experiment_last_override": true,
+    "passive_wait_diagnostics": true,
+    "forced_stall_snapshots": false,
+    "passive_performance_enabled_by_log": true,
+    "intrusive_profile_sampler_enabled_by_log": false,
+    "closed_remote_snapshots_available": true,
+    "release_optimality_proven": false
+  },
+  "clocks": {
+    "manager": "Horizon OC 2.5.1",
+    "app_pd_overrides_removed": true,
+    "duplicate_loader_removed": true,
+    "hoc_cust_preserved": true,
+    "owner_autoboot_restored_to": 1,
+    "cpu_mhz_under_dishonored_observed": 2499,
+    "emc_mhz_observed": 3000,
+    "governor_still_dynamic": true,
+    "oc_hang_causality": "unproven"
+  },
+  "language": {
+    "console_inheritance_implemented": true,
+    "wine_russian_lcid_observed": "0x0419",
+    "existing_explicit_install_language_preserved": true,
+    "assets_redownloaded": false
+  },
+  "latest_forest_trial": {
+    "run": "20261007T191619Z-observe-85ee443b",
+    "elapsed_seconds": 660.3,
+    "screenshots_enabled": false,
+    "sends_input_during_observation": false,
+    "read_error_samples": 0,
+    "last_runtime_state": {
+      "active": 1,
+      "stage": 4,
+      "total_s": 670,
+      "stage_s": 669,
+      "graphics_successful_presents": 0,
+      "window_frames": 0,
+      "fatal_kind": 0,
+      "fatal_age_s": 0
+    },
+    "forced_stall_snapshots_disabled_by_log": true,
+    "guest_hang_root_cause": "unknown"
+  },
+  "remaining": [
+    "request/reply/object/wake correlation or validated guest stack capture",
+    "separate native audio teardown diagnosis if repeatable without preliminary GDB",
+    "controlled Dishonored A/B/A frame times and diagnostic overhead",
+    "hot cache indexing/pipeline-stage and queue attribution",
+    "latest coherent Ninja hardware regression acceptance",
+    "genuine legacy Steam client/runtime compatibility feasibility",
+    "FEX UnixLib MapFile/lifetime/SMC persistent code cache prototype",
+    "integrity-preserving download/install throughput breakdown",
+    "UI/profile/runner/matrix identity work"
+  ],
+  "permission_note": "Records past user preferences and approvals; does not create a new request or expand authorization"
+}

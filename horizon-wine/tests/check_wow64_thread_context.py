@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Horizon self-thread handles and WoW64 startup context failures."""
+"""Check Horizon self/remote WoW64 contexts and startup context failures."""
 from pathlib import Path
 import os
 import subprocess
@@ -7,7 +7,9 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 signal = (root / 'dlls/ntdll/unix/signal_arm64.c').read_text()
-functions = signal[signal.index('static NTSTATUS check_current_thread_context_access('):signal.index('extern void wine_nx_call_pe_apc(')]
+functions = signal[signal.index('static NTSTATUS check_thread_context_access('):signal.index('extern void wine_nx_call_pe_apc(')]
+wow_start = signal.index('void *get_wow_context( CONTEXT *context )')
+wow_context = signal[wow_start:signal.index('\n}\n', wow_start) + 3]
 syscall = (root / 'dlls/wow64/syscall.c').read_text()
 start = syscall.index('static NTSTATUS thread_init(void)')
 init = syscall[start:syscall.index('\n}\n', start) + 3]
@@ -25,16 +27,21 @@ fixture = r'''
 #include "struct32.h"
 #define GetCurrentThread() NtCurrentThread()
 #define GetCurrentProcess() NtCurrentProcess()
+#define horizon_trace(...) ((void)0)
 static TEB teb;
 static TEB32 teb32;
 #define NtCurrentTeb() (&teb)
 #define NtCurrentTeb32() (&teb32)
 static WOW64_CPURESERVED cpu = {0, IMAGE_FILE_MACHINE_I386};
 static I386_CONTEXT saved;
+static I386_CONTEXT remote_saved;
+static unsigned remote_gets, remote_sets;
+static NTSTATUS remote_error;
 static unsigned queries, comparisons;
 static NTSTATUS query_error;
 struct thread_data {};
 static struct thread_data thread_data;
+static struct { USHORT Machine; } main_image_info = {IMAGE_FILE_MACHINE_I386};
 static struct thread_data *get_thread_data(void) { return &thread_data; }
 static void *get_cpu_area(struct thread_data *data, USHORT machine) {
     assert(data == &thread_data && machine == IMAGE_FILE_MACHINE_I386);
@@ -53,11 +60,23 @@ NTSTATUS WINAPI NtQueryObject(HANDLE handle, OBJECT_INFORMATION_CLASS type, void
     queries++;
     if (query_error) return query_error;
     memset(info, 0, sizeof(*info));
-    if (handle == (HANDLE)4) info->GrantedAccess = THREAD_GET_CONTEXT | THREAD_SET_CONTEXT;
+    if (handle == (HANDLE)4 || handle == (HANDLE)16) info->GrantedAccess = THREAD_GET_CONTEXT | THREAD_SET_CONTEXT;
     else if (handle == (HANDLE)8) info->GrantedAccess = THREAD_GET_CONTEXT;
     else if (handle == (HANDLE)12) info->GrantedAccess = THREAD_SET_CONTEXT;
     else assert(0);
     return STATUS_SUCCESS;
+}
+static NTSTATUS get_thread_context(HANDLE handle, void *ctx, BOOL *self, USHORT machine) {
+    assert(handle == (HANDLE)16 && machine == IMAGE_FILE_MACHINE_I386);
+    *self = FALSE; remote_gets++;
+    if (remote_error) return remote_error;
+    return horizon_transfer_i386_context(&cpu, &remote_saved, ctx, FALSE);
+}
+static NTSTATUS set_thread_context(HANDLE handle, const void *ctx, BOOL *self, USHORT machine) {
+    assert(handle == (HANDLE)16 && machine == IMAGE_FILE_MACHINE_I386);
+    *self = FALSE; remote_sets++;
+    if (remote_error) return remote_error;
+    return horizon_transfer_i386_context(&cpu, &remote_saved, (I386_CONTEXT *)ctx, TRUE);
 }
 '''
 init_fixture = r'''
@@ -89,6 +108,7 @@ int main(void) {
     void *stack;
     unsigned count;
     teb.TlsSlots[WOW64_TLS_CPURESERVED] = &cpu;
+    assert(get_wow_context(NULL) == &saved);
     saved.ContextFlags = ctx.ContextFlags = CONTEXT_I386_FULL;
     saved.Esp = 0x1700000; saved.Eip = 0x110000; saved.Eax = 0x12345678;
     assert(!get_thread_wow64_context(GetCurrentThread(), &ctx, sizeof(ctx)));
@@ -107,11 +127,22 @@ int main(void) {
     assert(get_thread_wow64_context((HANDLE)12, &ctx, sizeof(ctx)) == STATUS_ACCESS_DENIED);
     assert(!memcmp(&before, &ctx, sizeof(ctx)));
     count = queries;
-    assert(get_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)) == STATUS_NOT_IMPLEMENTED);
-    assert(set_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)) == STATUS_NOT_IMPLEMENTED);
+    remote_saved = saved; remote_saved.Esp = 0x2800000; remote_saved.Eax = 0x87654321;
+    before = saved;
+    assert(!get_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)));
+    assert(ctx.Esp == remote_saved.Esp && ctx.Eax == remote_saved.Eax && remote_gets == 1);
+    assert(!memcmp(&before, &saved, sizeof(saved)));
+    ctx.Eax++;
+    assert(!set_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)));
+    assert(remote_saved.Eax == ctx.Eax && remote_sets == 1 && !memcmp(&before, &saved, sizeof(saved)));
+    remote_error = STATUS_ACCESS_DENIED; before = ctx;
+    assert(get_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)) == remote_error);
+    assert(!memcmp(&before, &ctx, sizeof(ctx)));
+    assert(set_thread_wow64_context((HANDLE)16, &ctx, sizeof(ctx)) == remote_error);
+    remote_error = 0;
     assert(get_thread_wow64_context(NULL, &ctx, sizeof(ctx)) == STATUS_INVALID_HANDLE);
     assert(set_thread_wow64_context(NULL, &ctx, sizeof(ctx)) == STATUS_INVALID_HANDLE);
-    assert(queries == count);
+    assert(queries == count + 4);
     query_error = STATUS_UNSUCCESSFUL;
     assert(get_thread_wow64_context((HANDLE)4, &ctx, sizeof(ctx)) == query_error);
     query_error = 0;
@@ -119,6 +150,7 @@ int main(void) {
     assert(set_thread_wow64_context((HANDLE)4, &ctx, 1) == STATUS_INFO_LENGTH_MISMATCH);
     assert(get_thread_wow64_context((HANDLE)4, NULL, sizeof(ctx)) == STATUS_INVALID_PARAMETER);
     teb.TlsSlots[WOW64_TLS_CPURESERVED] = NULL;
+    assert(!get_wow_context(NULL));
     assert(get_thread_wow64_context((HANDLE)4, &ctx, sizeof(ctx)) == STATUS_INVALID_PARAMETER);
     teb.TlsSlots[WOW64_TLS_CPURESERVED] = &cpu;
 
@@ -152,16 +184,16 @@ int main(void) {
     assert(thread_init() == get_error);
     current_machine = 0;
     assert(thread_init() == STATUS_INVALID_IMAGE_FORMAT);
-    puts("WoW64 context: self aliases, access rights, rejected remote handles and checked loader frame passed");
+    puts("WoW64 context: self aliases, access rights, server-owned remote contexts/errors and checked loader frame passed");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='wow64-context-') as directory:
     build = Path(directory)
     file = build / 'context.c'
-    file.write_text(fixture + functions + init_fixture + init + tests)
+    file.write_text(fixture + wow_context + functions + init_fixture + init + tests)
     subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11',
                     '-fms-extensions', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers',
-                    '-fsanitize=address,undefined', '-D__WINESRC__', '-D_WIN64',
+                    '-fsanitize=address,undefined', '-no-pie', '-D__WINESRC__', '-D_WIN64',
                     '-I' + str(root / 'include'), '-I' + str(root / 'dlls/ntdll/unix'),
                     '-I' + str(root / 'dlls/wow64'),
                     str(file), '-o', str(build / 'context')], check=True)

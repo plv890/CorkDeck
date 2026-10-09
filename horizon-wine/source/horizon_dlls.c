@@ -1640,9 +1640,9 @@ const char *horizon_dlls_error( enum horizon_dlls_result result )
     case HORIZON_DLLS_OK: return "The Windows DLLs are up to date.";
     case HORIZON_DLLS_CANCELLED: return "Stopped. The files already downloaded are kept.";
     case HORIZON_DLLS_NETWORK: return "Could not reach the DLL repository on GitHub. Check the connection and try again.";
-    case HORIZON_DLLS_NOT_FOUND: return "The DLL repository has no manifest where Autorun looks for it.";
+    case HORIZON_DLLS_NOT_FOUND: return "The DLL repository has no manifest where CorkDeck looks for it.";
     case HORIZON_DLLS_INVALID: return "The DLL repository returned a manifest or file that is not valid.";
-    case HORIZON_DLLS_FLAVOR_MISMATCH: return "The DLL repository's files are for another Autorun runtime.";
+    case HORIZON_DLLS_FLAVOR_MISMATCH: return "The DLL repository's files are for another CorkDeck runtime.";
     case HORIZON_DLLS_IO: return "A file could not be written to the SD card.";
     case HORIZON_DLLS_HASH: return "A download did not match its SHA-256. Try again.";
     case HORIZON_DLLS_MEMORY: return "Not enough memory to read the DLL manifest.";

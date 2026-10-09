@@ -25,6 +25,19 @@ static uint32_t read_stack32( uint64_t address )
 
 int main(void)
 {
+    assert(nx_thread_policy_helper(0, "dxvk-cs"));
+    assert(!nx_thread_policy_helper(1, "dxvk-cs"));
+    assert(nx_thread_policy_helper(1, "dxvk-shader-l"));
+    assert(nx_thread_policy_helper(2, "dxvk-shader-h"));
+    assert(nx_thread_policy_helper(2, "dxvk-cache"));
+    assert(!nx_thread_policy_helper(3, "dxvk-cache"));
+    assert(nx_thread_policy_helper(4, "dxvk-shader-l"));
+    assert(nx_thread_policy_helper(4, "dxvk-cache"));
+    assert(!nx_thread_policy_helper(4, "dxvk-cs"));
+    assert(!nx_thread_policy_helper(4, "RenderingThread"));
+    assert(nx_thread_kernel_policy(3) && nx_thread_kernel_policy(4));
+    assert(!nx_thread_kernel_policy(0) && !nx_thread_kernel_policy(2));
+    assert(!nx_thread_policy_helper(1, "RenderingThread"));
     uint64_t callers[8];
     uint32_t x86[8];
     unsigned int top[8], n, i;

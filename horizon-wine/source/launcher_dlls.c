@@ -22,6 +22,9 @@ struct launcher_dlls
     /* The worker's while it runs, the launcher's between jobs. */
     struct horizon_dll_manifest remote, local;
     int have_remote, have_local, planned, notify;
+    /* Whether a program can start, as found between jobs: finding it reads the
+     * card's record and the core files, too much for every frame of a screen. */
+    int ready_known, ready_value;
     struct horizon_dlls_plan plan;
     enum horizon_dlls_result result;
     /* What the worker is doing, under the mutex. */
@@ -73,6 +76,16 @@ static int ready( struct launcher_dlls *d, char *why, size_t size )
 
     return horizon_dlls_ready( d->root, horizon_dll_runtime_features, FEATURE_COUNT,
                                why ? why : ignored, why ? size : sizeof(ignored) );
+}
+
+static int ready_kept( struct launcher_dlls *d )
+{
+    if (!d->thread && !d->ready_known)
+    {
+        d->ready_value = ready( d, NULL, 0 );
+        d->ready_known = 1;
+    }
+    return d->ready_value;
 }
 
 static void set_what( struct launcher_dlls *d, const char *what )
@@ -217,6 +230,7 @@ static int finish( struct launcher_dlls *d )
     SDL_WaitThread( d->thread, NULL );
     d->thread = NULL;
     d->job = JOB_NONE;
+    d->ready_known = 0;
     return 1;
 }
 
@@ -224,7 +238,7 @@ void launcher_dlls_tick( struct launcher_dlls *d )
 {
     if (!d || !finish( d ) || !d->notify || d->ui->modal_depth) return;
     d->notify = 0;
-    if (!ready( d, NULL, 0 ))
+    if (!ready_kept( d ))
         ui_notice( d->ui, "Windows DLLs needed: Settings > System > Windows DLLs" );
     else if (d->planned && d->have_remote && d->plan.pending)
         ui_notice( d->ui, "Windows DLL updates available" );
@@ -241,6 +255,7 @@ struct launcher_dlls *launcher_dlls_create( struct ui *ui, const char *root )
     /* No slash at the end: paths are joined with one. */
     while (strlen( d->root ) > 1 && d->root[strlen( d->root ) - 1] == '/') d->root[strlen( d->root ) - 1] = 0;
     d->notify = 1;
+    ready_kept( d );
     start( d, JOB_CHECK );
     return d;
 }
@@ -279,9 +294,9 @@ static void draw_progress( struct launcher_dlls *d, const char *title )
     }
     else ui_background( ui );
     ui_rounded( ui, x + 6, y + 10, w, h, 22, (SDL_Color){ 0, 0, 0, 120 } );
-    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 22, 27, 30, 250 } );
+    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 24, 33, 44, 250 } );
     ui_rounded_texture( ui, ui_sheen( ui ), NULL, (SDL_Rect){ x, y, w, h / 3 }, 22, (SDL_Color){ 255, 255, 255, 14 } );
-    ui_outline( ui, x, y, w, h, 22, 1, (SDL_Color){ 236, 240, 246, 120 } );
+    ui_outline( ui, x, y, w, h, 22, 2, (SDL_Color){ 58, 76, 98, 255 } );
     ui_text_fit( ui, ui->normal, x + margin, y + 30, w - 2 * margin, title, ui->value, 0 );
     ui_text_fit( ui, ui->small, x + margin, y + 78, w - 2 * margin, what[0] ? what : "Please wait...", ui->text, 0 );
     ui_rounded( ui, track_x, track_y, track_w, track_h, track_h / 2, (SDL_Color){ 55, 62, 70, 255 } );
@@ -335,6 +350,7 @@ static enum horizon_dlls_result run( struct launcher_dlls *d, int job, const cha
         SDL_WaitThread( d->thread, NULL );
         d->thread = NULL;
         d->job = JOB_NONE;
+        d->ready_known = 0;
     }
     ui_progress_end( d->ui );
     return d->result;
@@ -358,7 +374,7 @@ static int update( struct launcher_dlls *d )
               "downloaded is kept if it stops part of the way, and the rest comes the next time.%s",
               d->plan.pending, size_text( d->plan.download_bytes, amount, sizeof(amount) ),
               size_text( d->plan.pending_bytes, unpacked, sizeof(unpacked) ),
-              d->plan.unsupported ? "\n\nSome files need a newer Autorun and are left as they are." : "" );
+              d->plan.unsupported ? "\n\nSome files need a newer CorkDeck and are left as they are." : "" );
     if (!ui_confirm( d->ui, ready( d, NULL, 0 ) ? "Update the Windows DLLs?" :
                      "Download the Windows DLLs?", text, "Download" ))
         return 0;
@@ -419,7 +435,7 @@ void launcher_dlls_open( struct launcher_dlls *d )
             if (c->pending)
                 snprintf( row->value, sizeof(row->value), "%u of %u to download", c->pending, c->files );
             else if (c->unsupported)
-                snprintf( row->value, sizeof(row->value), "%u need a newer Autorun", c->unsupported );
+                snprintf( row->value, sizeof(row->value), "%u need a newer CorkDeck", c->unsupported );
             else snprintf( row->value, sizeof(row->value), "%u files, %s", c->files,
                            size_text( c->bytes, amount, sizeof(amount) ) );
             row->value_tone = c->pending || c->unsupported ? UI_VALUE_NORMAL : UI_VALUE_SUCCESS;
@@ -449,9 +465,14 @@ void launcher_dlls_open( struct launcher_dlls *d )
     }
 }
 
+int launcher_dlls_busy( struct launcher_dlls *d )
+{
+    return d && d->thread != NULL;
+}
+
 int launcher_dlls_is_ready( struct launcher_dlls *d )
 {
-    return !d || ready( d, NULL, 0 );
+    return !d || ready_kept( d );
 }
 
 /* The check and a plan, waiting for the one running in the background. */
@@ -473,16 +494,31 @@ int launcher_dlls_install( struct launcher_dlls *d )
     return update( d ) && ready( d, NULL, 0 );
 }
 
+/* A program was asked for: what it needs of the Windows DLLs comes without
+ * another question, its progress over the screen and B to stop it. */
 int launcher_dlls_ready( struct launcher_dlls *d )
 {
+    enum horizon_dlls_result result = HORIZON_DLLS_OK;
     char why[160], text[512];
 
-    if (!d || ready( d, why, sizeof(why) )) return 1;
-    snprintf( text, sizeof(text), "This game needs the Windows DLLs Autorun downloads from its DLL repository. %s\n\n"
-              "Download them in Windows DLLs; the game starts when you come back with them there.", why );
-    if (!ui_confirm( d->ui, "Windows DLLs needed", text, "Open Windows DLLs" )) return 0;
-    launcher_dlls_open( d );
-    return ready( d, NULL, 0 );
+    if (!d) return 1;
+    if (d->thread) run( d, JOB_NONE, "Checking the DLL repository" );
+    if (ready( d, why, sizeof(why) )) return 1;
+    if (!d->have_remote) run( d, JOB_CHECK, "Checking the DLL repository" );
+    /* The record says all is there and the files say otherwise: read them. */
+    if (d->have_remote && d->planned && !d->plan.pending) run( d, JOB_VERIFY, "Verifying the Windows DLLs" );
+    if (d->have_remote && d->planned && d->plan.pending) result = run( d, JOB_APPLY, "Downloading Windows DLLs" );
+    else if (!d->have_remote) result = d->result;
+    if (!d->ui->running) return 0;
+    if (ready( d, why, sizeof(why) ))
+    {
+        ui_notice( d->ui, "Windows components downloaded" );
+        return 1;
+    }
+    snprintf( text, sizeof(text), "%s\n\n%s", result != HORIZON_DLLS_OK ? horizon_dlls_error( result ) :
+              "The download finished, but the card still lacks what programs need.", why );
+    ui_message( d->ui, "Windows components", text );
+    return 0;
 }
 
 const char *launcher_dlls_describe( struct launcher_dlls *d, char *buffer, size_t size )
@@ -493,7 +529,7 @@ const char *launcher_dlls_describe( struct launcher_dlls *d, char *buffer, size_
     if (d->thread) return "Checking the DLL repository...";
     if (!d->have_remote || !d->planned)
     {
-        snprintf( buffer, size, "%s%s", ready( d, NULL, 0 ) ? "The card has the Windows DLLs. " : "",
+        snprintf( buffer, size, "%s%s", ready_kept( d ) ? "The card has the Windows DLLs. " : "",
                   horizon_dlls_error( d->result ) );
         return buffer;
     }
@@ -509,7 +545,7 @@ const char *launcher_dlls_status( struct launcher_dlls *d, char *buffer, size_t 
     *tone = UI_VALUE_NORMAL;
     if (!d) return "Unavailable";
     if (d->thread) return "Checking...";
-    if (!ready( d, NULL, 0 )) { *tone = UI_VALUE_DANGER; return "Not installed"; }
+    if (!ready_kept( d )) { *tone = UI_VALUE_DANGER; return "Not installed"; }
     if (!d->have_remote || !d->planned) return "Installed";
     if (d->plan.pending)
     {

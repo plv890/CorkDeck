@@ -24,7 +24,7 @@ int main(void)
     assert( main_count == 7 && advanced_count == 12 );
     option = nx_fex_options + NX_FEX_TSO;
     assert( !strcmp( option->name, "FEX_TSOENABLED" ) );
-    assert( !strcmp( nx_fex_option_default( option ), "0" ) );
+    assert( !strcmp( nx_fex_option_default( option ), "1" ) );
     assert( nx_fex_option_choice( option, "1" ) == 1 );
     assert( nx_fex_option_choice( option, "enabled" ) < 0 );
     option = nx_fex_options + NX_FEX_SMC;
@@ -43,6 +43,9 @@ int main(void)
     assert( nx_fex_option_choice( nx_fex_options + NX_FEX_MAXINST, "2500" ) == 3 );
     assert( launcher_kv_set( &kv, "FEX_TSOENABLED", NULL ) );
     assert( !launcher_kv_get( &kv, "FEX_TSOENABLED", value, sizeof(value) ) );
+    assert( launcher_kv_set( &kv, "FEX_TSOENABLED", "0" ) );
+    assert( launcher_kv_get( &kv, "FEX_TSOENABLED", value, sizeof(value) ) &&
+            nx_fex_option_choice( nx_fex_options + NX_FEX_TSO, value ) == 0 );
     assert( launcher_kv_get( &kv, "cpu", value, sizeof(value) ) && !strcmp( value, "fex" ) );
 
     puts( "FEX options: catalog, Horizon defaults and program settings passed" );

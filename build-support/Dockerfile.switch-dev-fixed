@@ -1,0 +1,11 @@
+# Both stages are the upstream 2026.09.28.4 release. No ARM64 program is run.
+FROM --platform=linux/arm64 ghcr.io/autorunhq/switch-dev@sha256:7aa4c7d8570d4342c2e18344c02ddb8d3c5d84d0d5003ee373f7e89f384f9213 AS mesa
+FROM --platform=linux/amd64 ghcr.io/autorunhq/switch-dev:2026.09.28.4
+
+# The amd64 publication contains host Rust objects in its Switch Mesa archive.
+# Use the same release's target archives, keeping the amd64 compiler/tooling.
+COPY --from=mesa /opt/devkitpro/portlibs/switch/lib/libEGL.a /opt/devkitpro/portlibs/switch/lib/libGL.a /opt/devkitpro/portlibs/switch/lib/libglapi.a /opt/devkitpro/portlibs/switch/lib/libvulkan.a /opt/devkitpro/portlibs/switch/lib/libmesa_util_c11.a /opt/devkitpro/portlibs/switch/lib/libblake3.a /opt/devkitpro/portlibs/switch/lib/libmesa_util.a /opt/devkitpro/portlibs/switch/lib/libmesa_util_simd.a /opt/devkitpro/portlibs/switch/lib/libxmlconfig.a /opt/devkitpro/portlibs/switch/lib/
+RUN set -eu; for name in EGL GL glapi vulkan mesa_util_c11 blake3 mesa_util mesa_util_simd xmlconfig; do \
+      aarch64-none-elf-readelf -h /opt/devkitpro/portlibs/switch/lib/lib${name}.a > /tmp/mesa-elf-headers; \
+      awk '/Machine:/ { count++; if ($0 !~ /AArch64/) bad=1 } END { exit (bad || !count) }' /tmp/mesa-elf-headers; \
+    done

@@ -1,0 +1,15 @@
+FROM ghcr.io/autorunhq/switch-dev:2026.09.28.4
+
+# The published amd64 image built Mesa's Rust members for the host because the
+# wrapper's Linux path leaves MESA_SWITCH_RUST_TARGET empty. Rebuild the exact
+# pinned Mesa revision with an explicit AArch64 ELF target.
+ENV MESA_SWITCH_RUST_TARGET=aarch64-unknown-linux-gnu
+ARG MESA_SWITCH_REVISION=d4a00ea0ab3f59afb967cc5d779e4263d237bd77
+RUN git init -q /tmp/mesa-switch \
+    && git -C /tmp/mesa-switch fetch -q --depth 1 https://github.com/danfromtico/mesa-switch.git ${MESA_SWITCH_REVISION} \
+    && git -C /tmp/mesa-switch checkout -q FETCH_HEAD \
+    && cd /tmp/mesa-switch \
+    && bash /usr/local/share/switch-dev/mesa-build.sh \
+    && aarch64-none-elf-readelf -h /opt/devkitpro/portlibs/switch/lib/libvulkan.a \
+       | awk '/Machine:/ && $0 !~ /AArch64/ { bad=1 } END { exit bad }' \
+    && rm -rf /tmp/mesa-switch /root/.cargo/registry

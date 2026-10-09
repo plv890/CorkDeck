@@ -29,7 +29,6 @@
 #include "launcher_settings.h"
 #include "launcher_catalog.h"
 #include "launcher_ui.h"
-#include "launcher_update.h"
 #include "launcher_dlls.h"
 #include "forwarder.h"
 #include "launcher_image.h"
@@ -42,15 +41,6 @@ static int prompt_set;
 static const char *font_path;
 static unsigned char *font_data;
 
-struct launcher_update *launcher_update_create( struct ui *ui, const char *root, int (*restart)(void) )
-{
-    (void)ui; (void)root; (void)restart;
-    return NULL;
-}
-void launcher_update_tick( void *update ) { (void)update; }
-void launcher_update_open( struct launcher_update *update ) { (void)update; }
-void launcher_update_destroy( struct launcher_update *update ) { (void)update; }
-int autorun_install_finish( const char *root ) { (void)root; return 1; }
 /* The DLL manager has its own test (check-horizon-dlls.sh); here the card has them. */
 struct launcher_dlls *launcher_dlls_create( struct ui *ui, const char *root ) { (void)ui; (void)root; return NULL; }
 void launcher_dlls_tick( struct launcher_dlls *dlls ) { (void)dlls; }
@@ -63,6 +53,7 @@ const char *launcher_dlls_status( struct launcher_dlls *dlls, char *buffer, size
 }
 void launcher_dlls_destroy( struct launcher_dlls *dlls ) { (void)dlls; }
 int launcher_dlls_is_ready( struct launcher_dlls *dlls ) { (void)dlls; return 1; }
+int launcher_dlls_busy( struct launcher_dlls *dlls ) { (void)dlls; return 0; }
 int launcher_dlls_install( struct launcher_dlls *dlls ) { (void)dlls; return 1; }
 const char *launcher_dlls_describe( struct launcher_dlls *dlls, char *buffer, size_t size )
 {

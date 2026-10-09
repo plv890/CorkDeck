@@ -383,7 +383,7 @@ add_library(wine-win32u-real OBJECT
     ../dlls/win32u/winstation.c
     ../dlls/win32u/winnx_drv.c
     ../dlls/win32u/winnx_opengl.c
-    # dibdrv: the software DIB rasterizer — the actual pixel engine that draws
+    # dibdrv: the software DIB rasterizer вЂ” the actual pixel engine that draws
     # into memory bitmaps / window surfaces. Core of the software window path.
     ../dlls/win32u/dibdrv/bitblt.c
     ../dlls/win32u/dibdrv/dc.c
@@ -626,6 +626,7 @@ target_link_libraries(autorun-game-forwarder PRIVATE nx)
 
 add_executable(wine-nx-runtime
     source/runtime.c
+    source/performance.c
     source/dxvk_releases.c
     source/runtime_platform.c
     source/sd_cache.c
@@ -637,6 +638,7 @@ add_executable(wine-nx-runtime
     source/wma_unix.c
     source/xinput_unix.c
     source/thread_profile.c
+    source/shader_ram_cache.c
     source/compositor.c
     source/osk.c
     source/compositor_gl.c
@@ -669,8 +671,20 @@ target_sources(wine-nx-runtime PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/forwarder_embed.c"
     source/launcher.c source/launcher_graphics.c source/launcher_catalog.c source/launcher_console.c
     source/launcher_svg.c source/launcher_ui.c source/launcher_audio.c source/launcher_forwarder.c
-    source/launcher_image.c source/steamgriddb.c source/autorun_update.c source/autorun_install.c
-    source/launcher_update.c source/launcher_setup.c source/setup_boot.c source/forwarder.c
+    source/launcher_image.c source/steamgriddb.c
+    source/app/app_settings.c source/app/app_records.c
+    source/steam/steam_probe.c source/steam/steam_directory.c source/steam/steam_ui.c
+    source/steam/steam_wire.c source/steam/steam_cm_message.c source/steam/steam_auth.c
+    source/steam/steam_cm.c source/steam/steam_crypto.c source/steam/steam_provider.c
+    source/steam/steam_library.c source/steam/steam_app.c source/steam/steam_backend.c
+    source/steam/steam_family.c source/steam/steam_settings.c source/steam/steam_session.c source/steam/steam_device_key.c
+    source/steam/steam_content.c source/steam/steam_manifest.c source/steam/steam_install.c source/steam/steam_storage.c source/steam/steam_engine.c
+    source/steam/steam_library_ui.c source/steam/steam_prerequisites.c source/steam/steam_prerequisites_ui.c source/steam/steam_local.c
+    source/steam/steam_install_script.c
+    source/steam/steam_cdn.c source/steam/steam_diagnostics.c source/steam/steam_file.c
+    source/steam/steam_artwork.c source/diagnostics/lan_log.c
+    vendor/qrcodegen/qrcodegen.c
+    source/launcher_setup.c source/setup_boot.c source/forwarder.c
     source/launcher_dlls.c source/horizon_dlls.c source/horizon_dlls_curl.c
     "${CMAKE_CURRENT_BINARY_DIR}/horizon_dll_features.h")
 # What this runtime reports to the DLL repository's manifest, read from the same
@@ -727,7 +741,9 @@ if(ELF2NSO AND NPDMTOOL)
                 wine_nx_hbl_npdm "${HBL_NPDM}"
                 wine_nx_icon_any "${CMAKE_CURRENT_SOURCE_DIR}/assets/autorun.jpg"
                 wine_nx_logo "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo.png"
+                corkdeck_font "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Manrope-SemiBold.ttf"
         DEPENDS "${HBL_NSO}" "${HBL_NPDM}" "${GAME_FORWARDER_NSO}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Manrope-SemiBold.ttf"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/autorun.jpg"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo.png"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/make-embed.py"
@@ -890,6 +906,9 @@ find_library(SWITCH_MINIZIP minizip HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib" 
 find_library(SWITCH_MBEDTLS mbedtls HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
 find_library(SWITCH_MBEDX509 mbedx509 HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
 find_library(SWITCH_MBEDCRYPTO mbedcrypto HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
+find_library(SWITCH_WSLAY wslay HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib" REQUIRED)
+find_library(SWITCH_LZMA lzma HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib" REQUIRED)
+target_link_libraries(wine-nx-runtime PRIVATE ${SWITCH_WSLAY} ${SWITCH_LZMA})
 # devkitPro's Mesa for OpenGL through EGL on the GPU (nouveau over nvservices);
 # its nouveau compiler is C++.
 find_library(SWITCH_EGL EGL HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
@@ -970,12 +989,14 @@ endif()
 # functions come through eglGetProcAddress, so it works over either Mesa.
 find_library(SWITCH_SDL2 SDL2 HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
 find_library(SWITCH_SDL2_TTF SDL2_ttf HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
-set_source_files_properties(source/launcher.c source/launcher_catalog.c source/launcher_graphics.c source/launcher_ui.c source/launcher_audio.c source/launcher_forwarder.c source/launcher_image.c source/launcher_update.c source/launcher_setup.c source/launcher_swap.c source/launcher_dlls.c source/steamgriddb.c source/dxvk_releases.c source/osk.c PROPERTIES
+set_source_files_properties(source/launcher.c source/launcher_catalog.c source/launcher_graphics.c source/launcher_ui.c source/launcher_audio.c source/launcher_forwarder.c source/launcher_image.c source/launcher_setup.c source/launcher_swap.c source/launcher_dlls.c source/steamgriddb.c source/dxvk_releases.c source/osk.c PROPERTIES
     INCLUDE_DIRECTORIES "$ENV{DEVKITPRO}/portlibs/switch/include/SDL2"
     COMPILE_DEFINITIONS _REENTRANT)
-set_property(SOURCE source/launcher_update.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_BUILD_VERSION)
 # The mark in the corner is only there in the build that generates it.
 set_property(SOURCE source/launcher.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_HAS_EMBEDDED_LOGO)
+set_source_files_properties(source/steam/steam_prerequisites_ui.c source/steam/steam_ui.c source/steam/steam_provider.c source/steam/steam_library_ui.c source/steam/steam_install.c source/steam/steam_engine.c source/steam/steam_content.c source/steam/steam_artwork.c PROPERTIES
+    INCLUDE_DIRECTORIES "$ENV{DEVKITPRO}/portlibs/switch/include/SDL2"
+    COMPILE_DEFINITIONS _REENTRANT)
 target_link_libraries(wine-nx-runtime PRIVATE
     ${SWITCH_SDL2_TTF} ${SWITCH_SDL2}
     ${SWITCH_CURL} ${SWITCH_MBEDTLS} ${SWITCH_MBEDX509} ${SWITCH_MBEDCRYPTO} ${SWITCH_MINIZIP}
@@ -1000,7 +1021,7 @@ if(NACPTOOL AND ELF2NRO)
     set(NTDLL_SMOKE_NRO_FILE "${CMAKE_CURRENT_BINARY_DIR}/wine-nx-ntdll-smoke.nro")
     set(NTDLL_FILE_SMOKE_NACP_FILE "${CMAKE_CURRENT_BINARY_DIR}/wine-nx-ntdll-file-smoke.nacp")
     set(NTDLL_FILE_SMOKE_NRO_FILE "${CMAKE_CURRENT_BINARY_DIR}/wine-nx-ntdll-file-smoke.nro")
-    set(RUNTIME_NACP_FILE "${CMAKE_CURRENT_BINARY_DIR}/wine-nx-runtime.nacp")
+    set(RUNTIME_NACP_FILE "${CMAKE_CURRENT_BINARY_DIR}/corkdeck-runtime.nacp")
     set(RUNTIME_NRO_FILE "${CMAKE_CURRENT_BINARY_DIR}/wine-nx-runtime.nro")
 
     add_custom_command(
@@ -1110,7 +1131,7 @@ if(NACPTOOL AND ELF2NRO)
 
     add_custom_command(
         OUTPUT "${RUNTIME_NACP_FILE}"
-        COMMAND "${NACPTOOL}" --create "Autorun" "ticoverse.com" "0.0.1" "${RUNTIME_NACP_FILE}"
+        COMMAND "${NACPTOOL}" --create "CorkDeck" "Maj0ra'sMask" "0.1.7.5" "${RUNTIME_NACP_FILE}"
         VERBATIM
     )
 

@@ -23,6 +23,7 @@
 #include <stdlib.h>
 
 #include "vulkan_private.h"
+#include "nx_performance.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
@@ -50747,9 +50748,12 @@ static NTSTATUS thunk64_vkAcquireNextImage2KHR(void *args)
 {
     struct vkAcquireNextImage2KHR_params *params = args;
 
+    NX_VK_PERF_BEGIN(NX_PERF_ACQUIRE);
+
     TRACE("%p, %p, %p\n", params->device, params->pAcquireInfo, params->pImageIndex);
 
     params->result = vk_funcs->p_vkAcquireNextImage2KHR(params->device, params->pAcquireInfo, params->pImageIndex);
+    NX_VK_PERF_END(NX_PERF_ACQUIRE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -50765,10 +50769,13 @@ static NTSTATUS thunk32_vkAcquireNextImage2KHR(void *args)
     } *params = args;
     VkAcquireNextImageInfoKHR pAcquireInfo_host;
 
+    NX_VK_PERF_BEGIN(NX_PERF_ACQUIRE);
+
     TRACE("%#x, %#x, %#x\n", params->device, params->pAcquireInfo, params->pImageIndex);
 
     convert_VkAcquireNextImageInfoKHR_win32_to_unwrapped_host((const VkAcquireNextImageInfoKHR32 *)UlongToPtr(params->pAcquireInfo), &pAcquireInfo_host);
     params->result = vk_funcs->p_vkAcquireNextImage2KHR((VkDevice)UlongToPtr(params->device), &pAcquireInfo_host, (uint32_t *)UlongToPtr(params->pImageIndex));
+    NX_VK_PERF_END(NX_PERF_ACQUIRE);
     return STATUS_SUCCESS;
 }
 
@@ -50777,9 +50784,12 @@ static NTSTATUS thunk64_vkAcquireNextImageKHR(void *args)
 {
     struct vkAcquireNextImageKHR_params *params = args;
 
+    NX_VK_PERF_BEGIN(NX_PERF_ACQUIRE);
+
     TRACE("%p, 0x%s, 0x%s, 0x%s, 0x%s, %p\n", params->device, wine_dbgstr_longlong(params->swapchain), wine_dbgstr_longlong(params->timeout), wine_dbgstr_longlong(params->semaphore), wine_dbgstr_longlong(params->fence), params->pImageIndex);
 
     params->result = vk_funcs->p_vkAcquireNextImageKHR(params->device, params->swapchain, params->timeout, params->semaphore, params->fence, params->pImageIndex);
+    NX_VK_PERF_END(NX_PERF_ACQUIRE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -50797,9 +50807,12 @@ static NTSTATUS thunk32_vkAcquireNextImageKHR(void *args)
         VkResult result;
     } *params = args;
 
+    NX_VK_PERF_BEGIN(NX_PERF_ACQUIRE);
+
     TRACE("%#x, 0x%s, 0x%s, 0x%s, 0x%s, %#x\n", params->device, wine_dbgstr_longlong(params->swapchain), wine_dbgstr_longlong(params->timeout), wine_dbgstr_longlong(params->semaphore), wine_dbgstr_longlong(params->fence), params->pImageIndex);
 
     params->result = vk_funcs->p_vkAcquireNextImageKHR((VkDevice)UlongToPtr(params->device), params->swapchain, params->timeout, params->semaphore, params->fence, (uint32_t *)UlongToPtr(params->pImageIndex));
+    NX_VK_PERF_END(NX_PERF_ACQUIRE);
     return STATUS_SUCCESS;
 }
 
@@ -59556,9 +59569,12 @@ static NTSTATUS thunk64_vkCreateComputePipelines(void *args)
 {
     struct vkCreateComputePipelines_params *params = args;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PIPELINE);
+
     TRACE("%p, 0x%s, %u, %p, %p, %p\n", params->device, wine_dbgstr_longlong(params->pipelineCache), params->createInfoCount, params->pCreateInfos, params->pAllocator, params->pPipelines);
 
     params->result = vulkan_device_from_handle(params->device)->p_vkCreateComputePipelines(vulkan_device_from_handle(params->device)->host.device, params->pipelineCache, params->createInfoCount, params->pCreateInfos, NULL, params->pPipelines);
+    NX_VK_PERF_END(NX_PERF_PIPELINE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -59579,6 +59595,8 @@ static NTSTATUS thunk32_vkCreateComputePipelines(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PIPELINE);
+
     TRACE("%#x, 0x%s, %u, %#x, %#x, %#x\n", params->device, wine_dbgstr_longlong(params->pipelineCache), params->createInfoCount, params->pCreateInfos, params->pAllocator, params->pPipelines);
 
     init_conversion_context(ctx);
@@ -59586,6 +59604,7 @@ static NTSTATUS thunk32_vkCreateComputePipelines(void *args)
     params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkCreateComputePipelines(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->pipelineCache, params->createInfoCount, pCreateInfos_host, NULL, (VkPipeline *)UlongToPtr(params->pPipelines));
     convert_VkComputePipelineCreateInfo_array_host_to_win32(pCreateInfos_host, (VkComputePipelineCreateInfo32 *)UlongToPtr(params->pCreateInfos), params->createInfoCount);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_PIPELINE);
     return STATUS_SUCCESS;
 }
 
@@ -60150,9 +60169,12 @@ static NTSTATUS thunk64_vkCreateGraphicsPipelines(void *args)
 {
     struct vkCreateGraphicsPipelines_params *params = args;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PIPELINE);
+
     TRACE("%p, 0x%s, %u, %p, %p, %p\n", params->device, wine_dbgstr_longlong(params->pipelineCache), params->createInfoCount, params->pCreateInfos, params->pAllocator, params->pPipelines);
 
     params->result = vulkan_device_from_handle(params->device)->p_vkCreateGraphicsPipelines(vulkan_device_from_handle(params->device)->host.device, params->pipelineCache, params->createInfoCount, params->pCreateInfos, NULL, params->pPipelines);
+    NX_VK_PERF_END(NX_PERF_PIPELINE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -60173,6 +60195,8 @@ static NTSTATUS thunk32_vkCreateGraphicsPipelines(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PIPELINE);
+
     TRACE("%#x, 0x%s, %u, %#x, %#x, %#x\n", params->device, wine_dbgstr_longlong(params->pipelineCache), params->createInfoCount, params->pCreateInfos, params->pAllocator, params->pPipelines);
 
     init_conversion_context(ctx);
@@ -60180,6 +60204,7 @@ static NTSTATUS thunk32_vkCreateGraphicsPipelines(void *args)
     params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkCreateGraphicsPipelines(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->pipelineCache, params->createInfoCount, pCreateInfos_host, NULL, (VkPipeline *)UlongToPtr(params->pPipelines));
     convert_VkGraphicsPipelineCreateInfo_array_host_to_win32(pCreateInfos_host, (VkGraphicsPipelineCreateInfo32 *)UlongToPtr(params->pCreateInfos), params->createInfoCount);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_PIPELINE);
     return STATUS_SUCCESS;
 }
 
@@ -70160,12 +70185,15 @@ static NTSTATUS thunk64_vkQueuePresentKHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PRESENT);
+
     TRACE("%p, %p\n", params->queue, params->pPresentInfo);
 
     init_conversion_context(ctx);
     convert_VkPresentInfoKHR_win64_to_unwrapped_host(ctx, params->pPresentInfo, &pPresentInfo_host);
     params->result = vk_funcs->p_vkQueuePresentKHR(params->queue, &pPresentInfo_host);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_PRESENT);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -70182,12 +70210,15 @@ static NTSTATUS thunk32_vkQueuePresentKHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_PRESENT);
+
     TRACE("%#x, %#x\n", params->queue, params->pPresentInfo);
 
     init_conversion_context(ctx);
     convert_VkPresentInfoKHR_win32_to_unwrapped_host(ctx, (const VkPresentInfoKHR32 *)UlongToPtr(params->pPresentInfo), &pPresentInfo_host);
     params->result = vk_funcs->p_vkQueuePresentKHR((VkQueue)UlongToPtr(params->queue), &pPresentInfo_host);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_PRESENT);
     return STATUS_SUCCESS;
 }
 
@@ -70255,12 +70286,15 @@ static NTSTATUS thunk64_vkQueueSubmit(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%p, %u, %p, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo_array_win64_to_unwrapped_host(ctx, params->pSubmits, params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit(params->queue, params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -70279,12 +70313,15 @@ static NTSTATUS thunk32_vkQueueSubmit(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%#x, %u, %#x, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo_array_win32_to_unwrapped_host(ctx, (const VkSubmitInfo32 *)UlongToPtr(params->pSubmits), params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit((VkQueue)UlongToPtr(params->queue), params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 
@@ -70296,12 +70333,15 @@ static NTSTATUS thunk64_vkQueueSubmit2(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%p, %u, %p, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo2_array_win64_to_unwrapped_host(ctx, params->pSubmits, params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit2(params->queue, params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -70320,12 +70360,15 @@ static NTSTATUS thunk32_vkQueueSubmit2(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%#x, %u, %#x, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo2_array_win32_to_unwrapped_host(ctx, (const VkSubmitInfo232 *)UlongToPtr(params->pSubmits), params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit2((VkQueue)UlongToPtr(params->queue), params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 
@@ -70337,12 +70380,15 @@ static NTSTATUS thunk64_vkQueueSubmit2KHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%p, %u, %p, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo2_array_win64_to_unwrapped_host(ctx, params->pSubmits, params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit2KHR(params->queue, params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -70361,12 +70407,15 @@ static NTSTATUS thunk32_vkQueueSubmit2KHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_SUBMIT);
+
     TRACE("%#x, %u, %#x, 0x%s\n", params->queue, params->submitCount, params->pSubmits, wine_dbgstr_longlong(params->fence));
 
     init_conversion_context(ctx);
     pSubmits_host = convert_VkSubmitInfo2_array_win32_to_unwrapped_host(ctx, (const VkSubmitInfo232 *)UlongToPtr(params->pSubmits), params->submitCount);
     params->result = vk_funcs->p_vkQueueSubmit2KHR((VkQueue)UlongToPtr(params->queue), params->submitCount, pSubmits_host, params->fence);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_SUBMIT);
     return STATUS_SUCCESS;
 }
 
@@ -71771,12 +71820,15 @@ static NTSTATUS thunk64_vkWaitForFences(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%p, %u, %p, %u, 0x%s\n", params->device, params->fenceCount, params->pFences, params->waitAll, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     pFences_host = convert_VkFence_array_win64_to_host(ctx, params->pFences, params->fenceCount);
     params->result = vulkan_device_from_handle(params->device)->p_vkWaitForFences(vulkan_device_from_handle(params->device)->host.device, params->fenceCount, pFences_host, params->waitAll, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -71796,12 +71848,15 @@ static NTSTATUS thunk32_vkWaitForFences(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%#x, %u, %#x, %u, 0x%s\n", params->device, params->fenceCount, params->pFences, params->waitAll, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     pFences_host = convert_VkFence_array_win32_to_host(ctx, (const VkFence *)UlongToPtr(params->pFences), params->fenceCount);
     params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkWaitForFences(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->fenceCount, pFences_host, params->waitAll, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 
@@ -71872,12 +71927,15 @@ static NTSTATUS thunk64_vkWaitSemaphores(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%p, %p, 0x%s\n", params->device, params->pWaitInfo, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     convert_VkSemaphoreWaitInfo_win64_to_host(ctx, params->pWaitInfo, &pWaitInfo_host);
     params->result = vulkan_device_from_handle(params->device)->p_vkWaitSemaphores(vulkan_device_from_handle(params->device)->host.device, &pWaitInfo_host, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -71895,12 +71953,15 @@ static NTSTATUS thunk32_vkWaitSemaphores(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%#x, %#x, 0x%s\n", params->device, params->pWaitInfo, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     convert_VkSemaphoreWaitInfo_win32_to_host(ctx, (const VkSemaphoreWaitInfo32 *)UlongToPtr(params->pWaitInfo), &pWaitInfo_host);
     params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkWaitSemaphores(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, &pWaitInfo_host, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 
@@ -71912,12 +71973,15 @@ static NTSTATUS thunk64_vkWaitSemaphoresKHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%p, %p, 0x%s\n", params->device, params->pWaitInfo, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     convert_VkSemaphoreWaitInfo_win64_to_host(ctx, params->pWaitInfo, &pWaitInfo_host);
     params->result = vulkan_device_from_handle(params->device)->p_vkWaitSemaphoresKHR(vulkan_device_from_handle(params->device)->host.device, &pWaitInfo_host, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -71935,12 +71999,15 @@ static NTSTATUS thunk32_vkWaitSemaphoresKHR(void *args)
     struct conversion_context local_ctx;
     struct conversion_context *ctx = &local_ctx;
 
+    NX_VK_PERF_BEGIN(NX_PERF_FENCE);
+
     TRACE("%#x, %#x, 0x%s\n", params->device, params->pWaitInfo, wine_dbgstr_longlong(params->timeout));
 
     init_conversion_context(ctx);
     convert_VkSemaphoreWaitInfo_win32_to_host(ctx, (const VkSemaphoreWaitInfo32 *)UlongToPtr(params->pWaitInfo), &pWaitInfo_host);
     params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkWaitSemaphoresKHR(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, &pWaitInfo_host, params->timeout);
     free_conversion_context(ctx);
+    NX_VK_PERF_END(NX_PERF_FENCE);
     return STATUS_SUCCESS;
 }
 

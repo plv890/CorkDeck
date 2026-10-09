@@ -68,6 +68,8 @@ static float nx_upscaling_sharpness = 0.4f;
 #if defined(__SWITCH__) && defined(WINE_NX_MESA_SWITCH)
 /* mesa-switch's loaderless NVK (build-mesa-switch.sh) is linked into the Switch
  * runtime, which has no dynamic linker. */
+extern int wine_nx_vk_swapchain_acquire( void );
+extern void wine_nx_vk_swapchain_release( void );
 extern PFN_vkVoidFunction wine_nx_vkGetDeviceProcAddr( VkDevice device, const char *name ) __asm__("vkGetDeviceProcAddr");
 extern PFN_vkVoidFunction wine_nx_vkGetInstanceProcAddr( VkInstance instance, const char *name ) __asm__("vkGetInstanceProcAddr");
 extern VkResult wine_nx_vk_allocate_shared_memory( VkDevice device,
@@ -2125,8 +2127,8 @@ static void win32u_vkDestroySurfaceKHR( VkInstance client_instance, VkSurfaceKHR
     instance->p_vkDestroySurfaceKHR( instance->host.instance, surface->obj.host.surface, NULL /* allocator */ );
 #if defined(__SWITCH__) && defined(WINE_NX_MESA_SWITCH)
     {
-        extern void wine_nx_gl_release_window(void);
-        wine_nx_gl_release_window();
+        extern void wine_nx_vk_screen_idle( int now );
+        wine_nx_vk_screen_idle( 1 );
     }
 #endif
     use_window_client_surface( surface->client, FALSE );
@@ -3167,8 +3169,21 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         present_modes->pPresentModes = &create_info_host.presentMode;
     }
 #endif
+#ifdef WINE_NX_MESA_SWITCH
+    /* The driver gives the screen's buffers to the swapchain, so the windows'
+     * presenter lets go of them first (horizon-wine/source/runtime.c). */
+    if (!wine_nx_vk_swapchain_acquire())
+    {
+        ERR( "hwnd %p: the screen has an OpenGL surface\n", surface->hwnd );
+        free( swapchain );
+        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+    }
+#endif
     if ((res = device->p_vkCreateSwapchainKHR( device->host.device, &create_info_host, NULL, &host_swapchain )))
     {
+#ifdef WINE_NX_MESA_SWITCH
+        wine_nx_vk_swapchain_release();
+#endif
         free( swapchain );
         return res;
     }
@@ -3188,6 +3203,9 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         {
             ERR( "creating fs hack images failed: %d\n", res );
             device->p_vkDestroySwapchainKHR( device->host.device, swapchain->obj.host.swapchain, NULL );
+#ifdef WINE_NX_MESA_SWITCH
+            wine_nx_vk_swapchain_release();
+#endif
             free( swapchain );
             return res;
         }
@@ -3196,6 +3214,9 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         {
             ERR( "creating blit images failed: %d\n", res );
             device->p_vkDestroySwapchainKHR( device->host.device, swapchain->obj.host.swapchain, NULL );
+#ifdef WINE_NX_MESA_SWITCH
+            wine_nx_vk_swapchain_release();
+#endif
             free( swapchain );
             return res;
         }
@@ -3257,6 +3278,9 @@ void win32u_vkDestroySwapchainKHR( VkDevice client_device, VkSwapchainKHR client
     }
 #endif
     device->p_vkDestroySwapchainKHR( device->host.device, swapchain->obj.host.swapchain, NULL );
+#ifdef WINE_NX_MESA_SWITCH
+    wine_nx_vk_swapchain_release();
+#endif
     instance->p_remove_object( instance, &swapchain->obj.obj );
 
     free( swapchain );
@@ -3603,6 +3627,7 @@ static VkResult record_compute_cmd( struct vulkan_device *device, struct swapcha
 #ifdef __SWITCH__
 /* Counted in the runtime's [PROGRESS] frames. */
 unsigned int wine_nx_vk_presents;
+unsigned int wine_nx_vk_successful_presents;
 static LONG nx_present_logs;
 
 static void nx_vk_note_present( const VkSwapchainKHR *client_swapchains, uint32_t count, VkResult res )
@@ -3612,6 +3637,8 @@ static void nx_vk_note_present( const VkSwapchainKHR *client_swapchains, uint32_
     RECT client_rect = {0};
     HWND hwnd;
 
+    if (count && (res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR))
+        __atomic_add_fetch( &wine_nx_vk_successful_presents, 1, __ATOMIC_RELAXED );
     if (res == VK_SUCCESS && presents > 4 && presents % 1800) return;
     if (res != VK_SUCCESS && __atomic_add_fetch( &nx_present_logs, 1, __ATOMIC_RELAXED ) > 32) return;
     if (!count) return;

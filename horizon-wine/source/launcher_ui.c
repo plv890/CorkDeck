@@ -24,8 +24,20 @@
 /* What a row keeps between its outline and its text. */
 #define ROW_PADDING      20
 /* Everything that has the focus wears the same outline. */
-#define UI_FOCUS_DIM     (SDL_Color){ 150, 160, 176, 90 }
-#define UI_FOCUS_LIT     (SDL_Color){ 244, 247, 250, 255 }
+/* What has the focus is framed in CorkDeck's blue, the same everywhere. */
+#define UI_FOCUS_DIM     (SDL_Color){ 26, 159, 255, 255 }
+#define UI_FOCUS_LIT     (SDL_Color){ 150, 214, 255, 255 }
+/* The corner of every card, row, button and dialog. A shape as round as it is
+ * tall -- a track, a disc, a pill -- is left as it was asked for. */
+#define UI_CORNER        6
+
+static int ui_corner( int w, int h, int radius )
+{
+    int least = w < h ? w : h;
+
+    if (radius * 2 >= least - 1) return radius;
+    return radius > UI_CORNER ? UI_CORNER : radius;
+}
 
 enum glyph
 {
@@ -35,6 +47,23 @@ enum glyph
 
 static char last_error[256];
 static int window_created;
+
+static const char *ui_translate( struct ui *ui, const char *text );
+
+#include <stdarg.h>
+
+/* A line for the log about what the interface showed or was told. */
+static void ui_trace( struct ui *ui, const char *format, ... )
+{
+    char line[400];
+    va_list args;
+
+    if (!ui->trace) return;
+    va_start( args, format );
+    vsnprintf( line, sizeof(line), format, args );
+    va_end( args );
+    ui->trace( line );
+}
 
 const char *ui_error(void)
 {
@@ -159,8 +188,13 @@ void ui_animated_border( struct ui *ui, int x, int y, int w, int h, int radius, 
 {
     struct border_point points[UI_BORDER_POINTS];
     SDL_Vertex vertices[UI_BORDER_POINTS * 6];
-    float dist = 0, perimeter, half = thickness / 2.0f, phase = 0;
+    float dist = 0, perimeter, half, phase = 0;
     int count = 0, i;
+
+    radius = ui_corner( w, h, radius );
+    /* A frame that marks the focus is never a hairline. */
+    if (thickness == 2) thickness = 3;
+    half = thickness / 2.0f;
 
     if (w <= 0 || h <= 0) return;
     if (radius * 2 > w) radius = w / 2;
@@ -208,6 +242,7 @@ void ui_fill_circle( struct ui *ui, float cx, float cy, float radius, SDL_Color 
 
 void ui_rounded( struct ui *ui, int x, int y, int w, int h, int radius, SDL_Color color )
 {
+    radius = ui_corner( w, h, radius );
     if (radius * 2 > w) radius = w / 2;
     if (radius * 2 > h) radius = h / 2;
     ui_fill( ui, x + radius, y, w - 2 * radius, h, color );
@@ -328,16 +363,19 @@ int ui_init( struct ui *ui, const void *font_data, size_t font_size, int animati
     ui->animations = animations;
     ui->running = 1;
     ui->highlight = -1;
-    ui->background = (SDL_Color){ 9, 12, 13, 255 };
-    ui->text = (SDL_Color){ 239, 242, 239, 255 };
-    ui->dim = (SDL_Color){ 169, 176, 171, 255 };
+    /* CorkDeck's palette (docs/reference/corkdeck-shell-reference.html): a deep
+     * blue-grey ground, raised panels a step lighter, blue for what has the
+     * focus and green for what is ready. */
+    ui->background = (SDL_Color){ 14, 20, 27, 255 };
+    ui->text = (SDL_Color){ 232, 238, 245, 255 };
+    ui->dim = (SDL_Color){ 143, 160, 179, 255 };
     ui->value = (SDL_Color){ 255, 255, 255, 255 };
-    ui->selection = (SDL_Color){ 226, 232, 226, 255 };
-    ui->panel = (SDL_Color){ 12, 16, 17, 242 };
-    ui->card = (SDL_Color){ 27, 33, 32, 245 };
-    ui->focus = (SDL_Color){ 42, 49, 46, 252 };
-    ui->success = (SDL_Color){ 112, 218, 146, 255 };
-    ui->danger = (SDL_Color){ 255, 120, 120, 255 };
+    ui->selection = (SDL_Color){ 26, 159, 255, 255 };
+    ui->panel = (SDL_Color){ 19, 27, 37, 242 };
+    ui->card = (SDL_Color){ 24, 33, 44, 245 };
+    ui->focus = (SDL_Color){ 33, 44, 58, 252 };
+    ui->success = (SDL_Color){ 92, 194, 74, 255 };
+    ui->danger = (SDL_Color){ 229, 87, 79, 255 };
 
     SDL_SetMainReady();
     SDL_SetHint( SDL_HINT_RENDER_SCALE_QUALITY, "linear" );
@@ -354,7 +392,7 @@ int ui_init( struct ui *ui, const void *font_data, size_t font_size, int animati
     flags = SDL_WINDOW_FULLSCREEN;
 #endif
     ui_step( "SDL_CreateWindow" );
-    if (!(ui->window = SDL_CreateWindow( "Autorun", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    if (!(ui->window = SDL_CreateWindow( "CorkDeck", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                          ui->width, ui->height, flags ))) goto fail;
     window_created = 1;
     /* SDL's software renderer draws the same, only slower, if the GPU one cannot start. */
@@ -379,8 +417,8 @@ int ui_init( struct ui *ui, const void *font_data, size_t font_size, int animati
         ui->screen = ui->snapshot = NULL;
     }
     ui_step( "fonts" );
-    if (!(ui->small = open_font( font_data, font_size, 18 )) || !(ui->normal = open_font( font_data, font_size, 23 )) ||
-        !(ui->large = open_font( font_data, font_size, 32 ))) goto fail;
+    if (!(ui->small = open_font( font_data, font_size, 19 )) || !(ui->normal = open_font( font_data, font_size, 24 )) ||
+        !(ui->large = open_font( font_data, font_size, 34 ))) goto fail;
     ui->glow = make_glow( ui );
     for (i = 0; i < GLYPH_COUNT; i++) ui->glyphs[i] = make_glyph( ui, glyphs[i].label, glyphs[i].pill );
     ui_step( "controllers" );
@@ -421,7 +459,7 @@ void ui_quit( struct ui *ui )
 
 void ui_sound( struct ui *ui, enum launcher_sound sound )
 {
-    launcher_audio_play( ui->audio, sound );
+    if (!ui->muted) launcher_audio_play( ui->audio, sound );
 }
 
 /***********************************************************************
@@ -434,6 +472,7 @@ void ui_background( struct ui *ui )
     SDL_RenderSetClipRect( ui->renderer, NULL );
     SDL_SetRenderDrawColor( ui->renderer, ui->background.r, ui->background.g, ui->background.b, 255 );
     SDL_RenderClear( ui->renderer );
+    ui_gradient( ui, 0, 0, ui->width, 300, (SDL_Color){ 27, 42, 61, 150 }, (SDL_Color){ 14, 20, 27, 0 }, 0 );
 }
 
 void ui_gradient( struct ui *ui, int x, int y, int w, int h, SDL_Color from, SDL_Color to, int horizontal )
@@ -457,6 +496,8 @@ void ui_rounded_texture( struct ui *ui, SDL_Texture *texture, const SDL_Rect *sr
 {
     int clipped = SDL_RenderIsClipEnabled( ui->renderer ), y;
     SDL_Rect clip;
+
+    radius = ui_corner( rect.w, rect.h, radius );
 
     if (!texture || rect.w <= 0 || rect.h <= 0) return;
     if (radius * 2 > rect.w) radius = rect.w / 2;
@@ -577,6 +618,7 @@ static struct ui_text_entry *text_entry( struct ui *ui, TTF_Font *font, const ch
 
 int ui_text_width( struct ui *ui, TTF_Font *font, const char *text )
 {
+    text = ui_translate( ui, text );
     struct ui_text_entry *entry;
     int w = 0, h;
 
@@ -588,6 +630,7 @@ int ui_text_width( struct ui *ui, TTF_Font *font, const char *text )
 
 void ui_text( struct ui *ui, TTF_Font *font, int x, int y, const char *text, SDL_Color color )
 {
+    text = ui_translate( ui, text );
     struct ui_text_entry *entry;
     SDL_Surface *surface;
 
@@ -615,6 +658,7 @@ void ui_text( struct ui *ui, TTF_Font *font, int x, int y, const char *text, SDL
 
 void ui_text_opening( struct ui *ui, TTF_Font *font, int x, int y, const char *text, SDL_Color color, float open )
 {
+    text = ui_translate( ui, text );
     struct ui_text_entry *entry;
     SDL_Rect clip, dst, previous;
     SDL_bool clipped;
@@ -641,11 +685,13 @@ void ui_text_opening( struct ui *ui, TTF_Font *font, int x, int y, const char *t
 
 void ui_text_centered( struct ui *ui, TTF_Font *font, int cx, int y, const char *text, SDL_Color color )
 {
+    text = ui_translate( ui, text );
     ui_text( ui, font, cx - ui_text_width( ui, font, text ) / 2, y, text, color );
 }
 
 void ui_text_right( struct ui *ui, TTF_Font *font, int right, int y, const char *text, SDL_Color color )
 {
+    text = ui_translate( ui, text );
     ui_text( ui, font, right - ui_text_width( ui, font, text ), y, text, color );
 }
 
@@ -655,6 +701,9 @@ static size_t fitting_bytes( TTF_Font *font, const char *text, int max_width )
     int extent, count;
     size_t bytes = 0;
 
+    /* A text that fits whole is not asked about letter by letter: the count
+     * that comes back can be one short of a text that ends in a ligature. */
+    if (max_width > 0 && !TTF_SizeUTF8( font, text, &extent, NULL ) && extent <= max_width) return strlen( text );
     if (max_width <= 0 || TTF_MeasureUTF8( font, text, max_width, &extent, &count )) return 0;
     while (text[bytes] && count > 0)
     {
@@ -673,6 +722,7 @@ static const char *ellipsis( TTF_Font *font )
 void ui_text_fit( struct ui *ui, TTF_Font *font, int x, int y, int max_width, const char *text,
                   SDL_Color color, int scroll )
 {
+    text = ui_translate( ui, text );
     int width = ui_text_width( ui, font, text );
     char cut[UI_TEXT_KEY];
     size_t bytes;
@@ -760,6 +810,7 @@ static int wrap_text( struct ui *ui, TTF_Font *font, int x, int y, int max_width
 int ui_text_wrapped( struct ui *ui, TTF_Font *font, int x, int y, int max_width, int max_lines,
                      const char *text, SDL_Color color, int centered )
 {
+    text = ui_translate( ui, text );
     return wrap_text( ui, font, x, y, max_width, max_lines, text, color, centered, 1 );
 }
 
@@ -774,7 +825,8 @@ void ui_header( struct ui *ui, const char *title, const char *context )
 
     ui_fill( ui, 0, 0, ui->width, band, ui->panel );
     if (!ui_animated( ui )) ui_fill( ui, 0, band, ui->width, 2, ui->selection );
-    ui_text( ui, ui->normal, 28, (band - TTF_FontHeight( ui->normal )) / 2, "Autorun", ui->value );
+    ui_rounded( ui, 28, band / 2 - 12, 18, 24, 5, (SDL_Color){ 199, 154, 98, 255 } );
+    ui_text( ui, ui->normal, 56, (band - TTF_FontHeight( ui->normal )) / 2, "CorkDeck", ui->value );
     ui_text_centered( ui, ui->large, ui->width / 2, (band - TTF_FontHeight( ui->large )) / 2, title, ui->value );
     title_right = ui->width / 2 + ui_text_width( ui, ui->large, title ) / 2;
     if (context && context[0])
@@ -797,7 +849,6 @@ void ui_header_back( struct ui *ui, const char *title, const char *context )
 
     /* The same shading over the top as the shell's, rather than a band of its
      * own: one screen should not look like it has a bar the others do not. */
-    ui_gradient( ui, 0, 0, ui->width, 150, (SDL_Color){ 0, 0, 0, 150 }, (SDL_Color){ 0, 0, 0, 0 }, 0 );
     /* The arrow, drawn rather than written, so it needs no glyph of its own. */
     for (i = 0; i < 9; i++)
     {
@@ -931,17 +982,33 @@ float ui_highlight( struct ui *ui, float target_y )
     return ui->highlight;
 }
 
+static const char *ui_translate( struct ui *ui, const char *text )
+{
+    return ui->translate && text ? ui->translate( text ) : text;
+}
+
+/* An announcement: a card that slides in at the top right corner, stays for
+ * milliseconds and is kept in the list the quick panel shows. */
 void ui_toast( struct ui *ui, const char *text, int milliseconds )
 {
-    ui->toast_notice = 0;
+    text = ui_translate( ui, text );
+    if (strcmp( ui->toast, text ) || SDL_GetTicks() >= ui->toast_until)
+    {
+        memmove( ui->notes + 1, ui->notes, (UI_NOTES - 1) * sizeof(ui->notes[0]) );
+        snprintf( ui->notes[0].text, sizeof(ui->notes[0].text), "%s", text );
+        ui->notes[0].hour = ui->notes[0].minute = -1;
+        if (ui->note_clock) ui->note_clock( &ui->notes[0].hour, &ui->notes[0].minute );
+        if (ui->note_count < UI_NOTES) ui->note_count++;
+        ui->toast_since = SDL_GetTicks();
+    }
     snprintf( ui->toast, sizeof(ui->toast), "%s", text );
-    ui->toast_since = SDL_GetTicks();
-    ui->toast_until = ui->toast_since + milliseconds;
+    ui->toast_until = SDL_GetTicks() + milliseconds;
+    ui->toast_notice = 0;
 }
 
 void ui_notice( struct ui *ui, const char *text )
 {
-    ui_toast( ui, text, 4000 );
+    ui_toast( ui, text, 4500 );
     ui->toast_notice = 1;
 }
 
@@ -950,44 +1017,30 @@ static void ui_download_icon( struct ui *ui, int x, int y, SDL_Color color );
 void ui_draw_toast( struct ui *ui )
 {
     Uint32 now = SDL_GetTicks();
-    int w, h, alpha, y;
+    int w, h, alpha, x, y, lines, text_w, max_text = 420;
     float open = 1.0f;
-    SDL_Color card, text;
 
     if (!ui->toast[0] || now >= ui->toast_until) return;
     if (ui->animations)
     {
-        open = clampf( (now - ui->toast_since) / 240.0f, 0, 1 );
-        if (ui->toast_until - now < 240) open = (ui->toast_until - now) / 240.0f;
+        open = clampf( (now - ui->toast_since) / 220.0f, 0, 1 );
+        if (ui->toast_until - now < 220) open = (ui->toast_until - now) / 220.0f;
         open = open * open * (3 - 2 * open);
     }
     alpha = (int)(255 * open);
-    if (ui->toast_notice)
-    {
-        w = ui_text_width( ui, ui->small, ui->toast ) + 68;
-        h = 48;
-        int x = ui->width - w - 32;
-        y = UI_HEADER_HEIGHT + 14 - (int)(12 * (1 - open));
-        ui_rounded( ui, x + 2, y + 4, w, h, 14, (SDL_Color){0,0,0,80 * alpha / 255} );
-        ui_rounded( ui, x, y, w, h, 14, (SDL_Color){28,33,37,248 * alpha / 255} );
-        ui_outline( ui, x, y, w, h, 14, 1, (SDL_Color){218,228,235,50 * alpha / 255} );
-        ui_download_icon( ui, x + 16, y + 14, (SDL_Color){235,240,243,alpha} );
-        ui_text( ui, ui->small, x + 46, y + (h - TTF_FontHeight( ui->small )) / 2,
-                 ui->toast, (SDL_Color){235,240,243,alpha} );
-        return;
-    }
-    y = ui->height - 78 + (int)(18 * (1 - open));
-    /* Between the list panel and the footer. */
-    w = ui_text_width( ui, ui->small, ui->toast ) + 40;
-    if (w > ui->width - 80) w = ui->width - 80;
-    h = TTF_FontHeight( ui->small ) + 12;
-    card = ui->selection;
-    card.a = 235 * alpha / 255;
-    if (ui->selection.r * 3 + ui->selection.g * 6 + ui->selection.b < 1600)
-        text = (SDL_Color){ 255, 255, 255, alpha };
-    else text = (SDL_Color){ 10, 14, 20, alpha };
-    ui_rounded( ui, (ui->width - w) / 2, y, w, h, h / 2, card );
-    ui_text_fit( ui, ui->small, (ui->width - w) / 2 + 20, y + 6, w - 40, ui->toast, text, 0 );
+    text_w = ui_text_width( ui, ui->small, ui->toast );
+    lines = text_w > max_text ? (text_w > 2 * max_text ? 3 : 2) : 1;
+    if (text_w > max_text) text_w = max_text;
+    w = text_w + 34 + (ui->toast_notice ? 30 : 12);
+    h = lines * TTF_FontHeight( ui->small ) + 24;
+    x = ui->width - w - 28 + (int)(40 * (1 - open));
+    y = UI_HEADER_HEIGHT + 6;
+    ui_rounded( ui, x + 2, y + 5, w, h, 12, (SDL_Color){ 0, 0, 0, 90 * alpha / 255 } );
+    ui_rounded( ui, x, y, w, h, 12, (SDL_Color){ 33, 44, 58, 250 * alpha / 255 } );
+    ui_rounded( ui, x, y + 10, 4, h - 20, 2, (SDL_Color){ 26, 159, 255, alpha } );
+    if (ui->toast_notice) ui_download_icon( ui, x + 18, y + h / 2 - 10, (SDL_Color){ 232, 238, 245, alpha } );
+    ui_text_wrapped( ui, ui->small, x + (ui->toast_notice ? 48 : 20), y + 12, text_w + 4, lines, ui->toast,
+                     (SDL_Color){ 232, 238, 245, alpha }, 0 );
 }
 
 /***********************************************************************
@@ -1342,16 +1395,13 @@ static void draw_card( struct ui *ui, const char *title, const char *heading, co
      * launcher's own card colour, and the light that goes round what has the
      * focus -- which, while a modal is up, is the modal. */
     ui_rounded( ui, x + 6, y + 10, w, h, 22, (SDL_Color){ 0, 0, 0, 120 } );
-    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 22, 27, 30, 250 } );
-    ui_rounded_texture( ui, ui_sheen( ui ), NULL, (SDL_Rect){ x, y, w, h / 3 }, 22,
-                        (SDL_Color){ 255, 255, 255, 14 } );
-    /* A modal is not what has the focus in the sense the light means: it is the
-     * only thing there is, so its edge stands still. */
-    ui_outline( ui, x, y, w, h, 22, 1, (SDL_Color){ 236, 240, 246, 120 } );
+    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 19, 27, 37, 255 } );
+    ui_rounded( ui, x, y, w, margin + title_h + 12, 22, (SDL_Color){ 33, 44, 58, 255 } );
+    ui_outline( ui, x, y, w, h, 22, 2, (SDL_Color){ 58, 76, 98, 255 } );
 
-    y += margin;
+    y += margin - 8;
     ui_text_fit( ui, ui->normal, x + margin, y, text_w, title, ui->value, 0 );
-    y += title_h + 16;
+    y += title_h + 16 + 8;
     if (heading && strcmp( heading, title ))
     {
         ui_text_fit( ui, ui->normal, x + margin, y, text_w, heading, ui->value, 0 );
@@ -1386,6 +1436,8 @@ static int ask_card( struct ui *ui, const char *title, const char *heading, cons
         ui_wait( ui );
     }
 done:
+    ui_trace( ui, "[UI] window \"%s\": %.200s -> %s", title ? title : "", text ? text : "",
+              answer == UI_B ? "closed" : answer == UI_A ? "accepted" : "another button" );
     if (ui->running) ui_sound( ui, answer == UI_B ? LAUNCHER_SOUND_BACK : LAUNCHER_SOUND_ACCEPT );
     if (ui->screen && ui->snapshot)
     {
@@ -1414,7 +1466,7 @@ int ui_menu( struct ui *ui, const char *title, const char *const *items, int cou
     static const struct ui_hint hints[] = { { UI_A, "Choose" }, { UI_B, "Close" } };
     const int margin = 28, item_h = 52, hints_h = 34;
     struct ui_input input;
-    int w = 420, h, x, y, top, i, chosen = -1;
+    int w = 520, h, x, y, top, i, chosen = -1;
 
     if (count <= 0) return -1;
     if (selection < 0 || selection >= count) selection = 0;
@@ -1452,16 +1504,18 @@ int ui_menu( struct ui *ui, const char *title, const char *const *items, int cou
         }
         else ui_background( ui );
         ui_rounded( ui, x + 6, y + 10, w, h, 22, (SDL_Color){ 0, 0, 0, 120 } );
-        ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 22, 27, 30, 250 } );
-        ui_rounded_texture( ui, ui_sheen( ui ), NULL, (SDL_Rect){ x, y, w, h / 3 }, 22,
-                            (SDL_Color){ 255, 255, 255, 14 } );
-        ui_outline( ui, x, y, w, h, 22, 1, (SDL_Color){ 236, 240, 246, 120 } );
-        ui_text_fit( ui, ui->normal, x + margin, y + margin, w - 2 * margin, title, ui->value, 0 );
+        ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 19, 27, 37, 255 } );
+        /* The title is a band of its own, so it is not taken for the first choice. */
+        ui_rounded( ui, x, y, w, margin + TTF_FontHeight( ui->normal ) + 4, 22, (SDL_Color){ 33, 44, 58, 255 } );
+        ui_outline( ui, x, y, w, h, 22, 2, (SDL_Color){ 58, 76, 98, 255 } );
+        ui_text_fit( ui, ui->normal, x + margin, y + margin / 2 + 2, w - 2 * margin, title, ui->value, 0 );
         top = y + margin + TTF_FontHeight( ui->normal ) + 14;
         for (i = 0; i < count; i++)
         {
             int row = top + i * item_h;
 
+            ui_rounded( ui, x + 14, row + 2, w - 28, item_h - 6, 6,
+                        i == selection ? (SDL_Color){ 33, 44, 58, 255 } : (SDL_Color){ 24, 33, 44, 255 } );
             if (i == selection)
                 ui_animated_border( ui, x + 14, row + 2, w - 28, item_h - 6, 12, 2, UI_FOCUS_DIM, UI_FOCUS_LIT );
             ui_text_fit( ui, ui->normal, x + 14 + ROW_PADDING, row + (item_h - TTF_FontHeight( ui->normal )) / 2,
@@ -1519,10 +1573,10 @@ void ui_progress_update( struct ui *ui, const char *title, const char *status,
     else ui_background( ui );
 
     ui_rounded( ui, x + 6, y + 10, w, h, 22, (SDL_Color){ 0, 0, 0, 120 } );
-    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 22, 27, 30, 250 } );
+    ui_rounded( ui, x, y, w, h, 22, (SDL_Color){ 24, 33, 44, 250 } );
     ui_rounded_texture( ui, ui_sheen( ui ), NULL, (SDL_Rect){ x, y, w, h / 3 }, 22,
                         (SDL_Color){ 255, 255, 255, 14 } );
-    ui_outline( ui, x, y, w, h, 22, 1, (SDL_Color){ 236, 240, 246, 120 } );
+    ui_outline( ui, x, y, w, h, 22, 2, (SDL_Color){ 58, 76, 98, 255 } );
     ui_text_fit( ui, ui->normal, x + margin, y + 30, w - 2 * margin, title, ui->value, 0 );
     ui_text_fit( ui, ui->small, x + margin, y + 78, w - 2 * margin, status, ui->text, 0 );
 
@@ -1638,6 +1692,8 @@ static enum ui_action action_result( struct ui *ui, enum ui_action action )
 enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *title, const char *context,
                             const struct ui_row *rows, int count, int can_reset )
 {
+    ui_trace( ui, "[UI] list \"%s\": %d rows, on \"%s\"", title ? title : "", count,
+              count > 0 && list->selection >= 0 && list->selection < count ? rows[list->selection].label : "" );
     /* The same width and the same flat surfaces as the settings screens: one
      * language for every list the launcher shows. */
     const int column_x = UI_HEADER_MARGIN;
@@ -1664,6 +1720,11 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
         if (list->selection < 0) list->selection = 0;
         while (ui_poll( ui, &input ))
         {
+            if ((input.button == UI_MINUS || input.button == UI_PLUS) && ui->global_key && !ui->modal_depth)
+            {
+                if (ui->global_key( ui->global_data, input.button )) return UI_ACTION_BACK;
+                continue;
+            }
             int direction = 0;
 
             row = rows + list->selection;
@@ -1781,8 +1842,9 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
             SDL_Color color = rows[i].disabled ? ui->dim : rows[i].destructive ? ui->danger : current ? ui->value : ui->text;
 
             any_adjustable |= rows[i].adjustable && !rows[i].disabled;
-            /* Nothing is filled: what has the focus is outlined, so the colour
-             * on the screen is the artwork's and the text's. */
+            /* Each row is a panel; the one in focus is lighter and framed. */
+            ui_rounded( ui, column_x, y + 1, column_w, ROW_HEIGHT - 6, 6,
+                        current && !list->in_header ? (SDL_Color){ 33, 44, 58, 255 } : (SDL_Color){ 24, 33, 44, 255 } );
             if (current && !list->in_header)
                 ui_animated_border( ui, column_x, (int)bar - 1, column_w, ROW_HEIGHT - 6, 12, 2,
                                     UI_FOCUS_DIM, UI_FOCUS_LIT );
@@ -1998,8 +2060,8 @@ static int settings_dropdown( struct ui *ui, const struct ui_list *anchor,
         if (ui->snapshot) SDL_RenderCopy( ui->renderer, ui->snapshot, NULL, NULL );
         else ui_background( ui );
         ui_rounded( ui, x + 6, y + 8, panel_w, h, 14, (SDL_Color){ 0, 0, 0, 135 } );
-        ui_rounded( ui, x, y, panel_w, h, 14, (SDL_Color){ 22, 27, 30, 252 } );
-        ui_outline( ui, x, y, panel_w, h, 14, 1, (SDL_Color){ 236, 240, 246, 105 } );
+        ui_rounded( ui, x, y, panel_w, h, 14, (SDL_Color){ 24, 33, 44, 252 } );
+        ui_outline( ui, x, y, panel_w, h, 14, 2, (SDL_Color){ 58, 76, 98, 255 } );
         clip = (SDL_Rect){ x + 4, y + padding, panel_w - 8, visible * row_h };
         SDL_RenderSetClipRect( ui->renderer, &clip );
         {
@@ -2072,6 +2134,8 @@ enum ui_action ui_settings_run( struct ui *ui, struct ui_list *list, const char 
                                 const char *const *groups, int group_count,
                                 const struct ui_row *rows, int count, int can_reset, int *group )
 {
+    ui_trace( ui, "[UI] settings \"%s\": %d rows, on \"%s\"", title ? title : "", count,
+              count > 0 && list->selection >= 0 && list->selection < count ? rows[list->selection].label : "" );
     /* The rows end where the clock and the battery begin, as everything else on
      * the screen does. */
     const int visible = (ui->height - LIST_TOP - 86) / SET_ROW_H;

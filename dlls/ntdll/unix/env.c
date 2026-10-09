@@ -771,6 +771,16 @@ static void init_locale(void)
     setlocale( LC_ALL, "" );
     if (!unix_to_win_locale( setlocale( LC_CTYPE, NULL ), system_locale )) system_locale[0] = 0;
     if (!unix_to_win_locale( setlocale( LC_MESSAGES, NULL ), user_locale )) user_locale[0] = 0;
+#ifdef __SWITCH__
+    /* Newlib has no installed locale catalogue. Use the native console locale
+     * before resolving Windows NLS data instead of its permanent C locale. */
+    p = getenv( "WINE_NX_SYSTEM_LOCALE" );
+    if (p && strlen(p) < sizeof(system_locale) && strlen(p) < sizeof(user_locale))
+    {
+        strcpy( system_locale, p );
+        strcpy( user_locale, p );
+    }
+#endif
 
 #ifdef __APPLE__
     if (!system_locale[0])

@@ -42,6 +42,15 @@ static NTSTATUS nx_xinput_get_state_unix( void *args )
 
     params->connected = 0;
     if (params->index) return STATUS_SUCCESS;  /* player 1 only */
+    {
+        /* Said once: whether a program reads the controller this way at all is
+         * the first thing to know when it does not answer to it. */
+        extern void wine_nx_runtime_trace( const char *msg );
+        static int announced;
+
+        if (!__atomic_exchange_n( &announced, 1, __ATOMIC_RELAXED ))
+            wine_nx_runtime_trace( "[XINPUT] the program reads the controller through XInput" );
+    }
     pthread_mutex_lock( &pad_mutex );
     if (!pad_ready)
     {

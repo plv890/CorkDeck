@@ -232,7 +232,17 @@ static inline int launcher_dxvk_config( const struct launcher_settings *settings
 
     if (settings->frame_limit < 0 || settings->frame_limit >= LAUNCHER_FRAME_LIMIT_COUNT ||
         settings->dxvk_hud < 0 || settings->dxvk_hud >= LAUNCHER_HUD_COUNT) return 0;
-    length = snprintf( out, size, "dxgi.syncInterval = %d\nd3d9.presentInterval = %d\n",
+    /* The console's memory is one pool of about 3 GB for the program, Wine and
+     * the GPU together. A game told of a desktop card's memory fills it and
+     * runs the whole process out; one that keeps a second copy of every
+     * managed Direct3D 9 texture does the same sooner. A game's own dxvk.conf,
+     * which goes after these lines, can say otherwise. */
+    length = snprintf( out, size, "dxgi.syncInterval = %d\nd3d9.presentInterval = %d\n"
+                       "d3d9.maxAvailableMemory = 1024\ndxgi.maxDeviceMemory = 1024\n"
+                       "d3d9.evictManagedOnUnlock = True\n"
+                       /* Two shader compiler threads and pipelines compiled in the
+                        * background: what the console was tuned to before the fork. */
+                       "dxvk.numCompilerThreads = 2\ndxvk.enableGraphicsPipelineLibrary = True\n",
                        !!settings->vsync, !!settings->vsync );
     if (length < 0 || (size_t)length >= size) return 0;
     if (settings->dxvk_hud)

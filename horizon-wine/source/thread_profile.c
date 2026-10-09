@@ -27,6 +27,8 @@
 #include <switch.h>
 
 #include "thread_profile.h"
+#include "shader_ram_cache.h"
+#include "request_trace.h"
 
 #define NX_PROF_MAX_THREADS  128
 #define NX_PROF_TARGETS      4
@@ -66,7 +68,203 @@ struct nx_prof_thread
 extern void horizon_follow_thread_cores( void *teb, unsigned int mask ) __attribute__((weak));
 static __thread int affinity_fixed;
 int wine_nx_balance_enabled = 1;
+int wine_nx_stall_snapshots_enabled = 1;
 static int four_cores_enabled;
+static int worker_policy;
+unsigned int wine_nx_application_core_mask = 7;
+extern Result __real_svcSetThreadCoreMask( Handle handle, s32 core, u32 mask );
+
+int wine_nx_thread_distributed_hints( void )
+{
+    return worker_policy == 4;
+}
+
+/* Separate from the Wine registry: Mesa workers must not be paused, woken or
+ * counted as guest threads by the runtime's shutdown/sampling machinery. */
+#define NX_MESA_WORKERS 32
+static struct nx_mesa_worker
+{
+    Handle handle;
+    char name[32];
+    u64 last_ticks;
+    unsigned int jobs[4]; /* job-start locations, not time residency */
+} mesa_workers[NX_MESA_WORKERS];
+static pthread_mutex_t mesa_mutex = PTHREAD_MUTEX_INITIALIZER;
+static __thread struct nx_mesa_worker *mesa_current;
+static uint64_t thread_ticks( Handle handle );
+static int wait_diagnostics;
+static struct nx_request_table request_trace = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+uint64_t wine_nx_request_begin(char role, unsigned int tid, unsigned int code,
+                             const char *name, unsigned int flags, int64_t timeout,
+                             const void *words, unsigned int size, uint64_t caller)
+{
+    struct nx_request_record record = {0};
+    if (!__atomic_load_n(&wait_diagnostics, __ATOMIC_RELAXED)) return 0;
+    record.started = armGetSystemTick();
+    record.handle = threadGetCurHandle(); record.tid = tid; record.code = code;
+    record.role = role; record.flags = flags; record.timeout = timeout; record.caller = caller;
+    if (name) snprintf(record.name, sizeof(record.name), "%s", name);
+    if (words) memcpy(record.words, words, size < sizeof(record.words) ? size : sizeof(record.words));
+    return nx_request_begin(&request_trace, &record);
+}
+void wine_nx_request_end(uint64_t token) { nx_request_end(&request_trace, token); }
+static void request_trace_report(void)
+{
+    uint64_t dropped, now = armGetSystemTick(); unsigned int i;
+    for (i = 0; i < NX_REQUEST_SLOTS; ++i) {
+        char line[320]; struct nx_request_record row, *r = &row;
+        pthread_mutex_lock(&request_trace.mutex);
+        row = request_trace.rows[i]; dropped = request_trace.dropped;
+        pthread_mutex_unlock(&request_trace.mutex);
+        if (!r->token || now < r->started || armTicksToNs(now-r->started) < 1000000000ULL) continue;
+        snprintf(line, sizeof(line), "[REQUEST-PENDING] token=%llu role=%c tid=%x handle=%x req=%u name=%s age_ms=%llu flags=%x timeout=%lld words=%x,%x,%x,%x,%x caller=%llx dropped=%llu",
+                 (unsigned long long)r->token, r->role, r->tid, r->handle, r->code, r->name,
+                 (unsigned long long)(armTicksToNs(now-r->started)/1000000), r->flags,
+                 (long long)r->timeout, r->words[0], r->words[1], r->words[2], r->words[3], r->words[4],
+                 (unsigned long long)r->caller, (unsigned long long)dropped);
+        wine_nx_runtime_trace(line);
+    }
+}
+static struct nx_pending_wait { Handle handle; u64 address, started; int expected, kind, active; }
+    pending_waits[NX_PROF_MAX_THREADS];
+static __thread struct nx_pending_wait *pending_current;
+static pthread_mutex_t wait_mutex = PTHREAD_MUTEX_INITIALIZER;
+void wine_nx_wait_configure(int enabled) { __atomic_store_n(&wait_diagnostics, enabled, __ATOMIC_RELAXED); }
+void wine_nx_wait_begin(const void *address, int expected, int kind)
+{
+    unsigned int i;
+    if (!__atomic_load_n(&wait_diagnostics, __ATOMIC_RELAXED)) return;
+    if (!pending_current)
+    {
+        Handle handle=threadGetCurHandle();
+        pthread_mutex_lock(&wait_mutex);
+        for(i=0;i<NX_PROF_MAX_THREADS;i++) if(!pending_waits[i].handle)
+        { pending_current=&pending_waits[i]; pending_current->handle=handle; break; }
+        pthread_mutex_unlock(&wait_mutex);
+    }
+    if(!pending_current) return;
+    __atomic_store_n(&pending_current->address,(u64)(uintptr_t)address,__ATOMIC_RELAXED);
+    __atomic_store_n(&pending_current->expected,expected,__ATOMIC_RELAXED);
+    __atomic_store_n(&pending_current->kind,kind,__ATOMIC_RELAXED);
+    __atomic_store_n(&pending_current->started,armGetSystemTick(),__ATOMIC_RELAXED);
+    __atomic_store_n(&pending_current->active,1,__ATOMIC_RELEASE);
+}
+void wine_nx_wait_end(void)
+{
+    if(pending_current) __atomic_store_n(&pending_current->active,0,__ATOMIC_RELEASE);
+}
+static void pending_wait_report(void)
+{
+    request_trace_report();
+    char lines[16][160]; unsigned int i,count=0;
+    u64 now=armGetSystemTick();
+    pthread_mutex_lock(&wait_mutex);
+    for(i=0;i<NX_PROF_MAX_THREADS && count<16;i++)
+    {
+        struct nx_pending_wait *wait=&pending_waits[i];
+        u64 started,address; int expected,kind;
+        if(!wait->handle || !__atomic_load_n(&wait->active,__ATOMIC_ACQUIRE)) continue;
+        started=__atomic_load_n(&wait->started,__ATOMIC_RELAXED);
+        if(now<started || armTicksToNs(now-started)<1000000000ULL) continue;
+        address=__atomic_load_n(&wait->address,__ATOMIC_RELAXED);
+        expected=__atomic_load_n(&wait->expected,__ATOMIC_RELAXED);
+        kind=__atomic_load_n(&wait->kind,__ATOMIC_RELAXED);
+        if(!__atomic_load_n(&wait->active,__ATOMIC_ACQUIRE) ||
+           started!=__atomic_load_n(&wait->started,__ATOMIC_RELAXED)) continue;
+        snprintf(lines[count++],sizeof(lines[0]),"[WAIT-PENDING] handle=%x kind=%s address=%llx expected=%d age_ms=%llu",
+                 wait->handle,kind==1 ? "futex" : "server-pipe",(unsigned long long)address,
+                 expected,(unsigned long long)(armTicksToNs(now-started)/1000000));
+    }
+    pthread_mutex_unlock(&wait_mutex);
+    for(i=0;i<count;i++) wine_nx_runtime_trace(lines[i]);
+}
+
+int wine_nx_mesa_worker_start( const char *name, unsigned int index, int minimum_priority )
+{
+    Handle handle = threadGetCurHandle();
+    s32 old_priority = -1, preferred = minimum_priority ? 3 : index % 4;
+    u64 mask = 0;
+    Result rc;
+    char line[192];
+    unsigned int i;
+
+    if (worker_policy != 4 || R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ||
+        (mask & 15) != 15) return 0;
+    if (minimum_priority)
+    {
+        if (R_FAILED(svcGetThreadPriority(&old_priority, handle)) ||
+            R_FAILED(svcSetThreadPriority(handle, 63))) return 0;
+    }
+    rc = __real_svcSetThreadCoreMask(handle, preferred, 15);
+    if (R_FAILED(rc))
+    {
+        if (minimum_priority) svcSetThreadPriority(handle, old_priority);
+        return 0;
+    }
+    pthread_mutex_lock(&mesa_mutex);
+    for (i = 0; i < NX_MESA_WORKERS; i++)
+        if (!mesa_workers[i].handle)
+        {
+            mesa_current = &mesa_workers[i];
+            memset(mesa_current, 0, sizeof(*mesa_current));
+            mesa_current->handle = handle;
+            mesa_current->last_ticks = thread_ticks(handle);
+            snprintf(mesa_current->name, sizeof(mesa_current->name), "%s%u", name, index);
+            break;
+        }
+    pthread_mutex_unlock(&mesa_mutex);
+    svcGetThreadPriority(&old_priority, handle);
+    snprintf(line, sizeof(line), "[MESA-SCHED] name=%s%u preferred=%d mask=f priority=%d registered=%d",
+             name, index, preferred, old_priority, i < NX_MESA_WORKERS);
+    wine_nx_runtime_trace(line);
+    return 1;
+}
+
+void wine_nx_mesa_worker_job( void )
+{
+    int core;
+    if (!mesa_current) return;
+    core = svcGetCurrentProcessorNumber();
+    if (core >= 0 && core < 4)
+        __atomic_fetch_add(&mesa_current->jobs[core], 1, __ATOMIC_RELAXED);
+}
+
+void wine_nx_mesa_worker_end( void )
+{
+    if (!mesa_current) return;
+    pthread_mutex_lock(&mesa_mutex);
+    memset(mesa_current, 0, sizeof(*mesa_current));
+    mesa_current = NULL;
+    pthread_mutex_unlock(&mesa_mutex);
+}
+
+static void mesa_worker_report( u64 interval )
+{
+    char lines[NX_MESA_WORKERS][224];
+    unsigned int i, count = 0;
+    pthread_mutex_lock(&mesa_mutex);
+    for (i = 0; i < NX_MESA_WORKERS; i++)
+    {
+        struct nx_mesa_worker *worker = &mesa_workers[i];
+        u64 ticks, mask = 0;
+        s32 preferred = -1, priority = -1;
+        unsigned int jobs[4], c;
+        Result rc, prc;
+        if (!worker->handle) continue;
+        ticks = thread_ticks(worker->handle);
+        rc = svcGetThreadCoreMask(&preferred, &mask, worker->handle);
+        prc = svcGetThreadPriority(&priority, worker->handle);
+        for (c = 0; c < 4; c++) jobs[c] = __atomic_load_n(&worker->jobs[c], __ATOMIC_RELAXED);
+        snprintf(lines[count++], sizeof(lines[0]),
+                 "[MESA-WORKER] name=%s preferred=%d mask=%llx priority=%d cpu_permille=%u job_starts=%u,%u,%u,%u core_result=%08x priority_result=%08x",
+                 worker->name, preferred, (unsigned long long)mask, priority,
+                 nx_prof_permille(ticks, worker->last_ticks, interval),
+                 jobs[0], jobs[1], jobs[2], jobs[3], rc, prc);
+        worker->last_ticks = ticks;
+    }
+    pthread_mutex_unlock(&mesa_mutex);
+    for (i = 0; i < count; i++) wine_nx_runtime_trace(lines[i]);
+}
 
 struct nx_prof_row
 {
@@ -100,13 +298,24 @@ static int profiling;
  * kernel's view of the code mapping. */
 static uintptr_t runtime_base, runtime_end;
 
-extern Result __real_svcSetThreadCoreMask( Handle handle, s32 core, u32 mask );
-
 /* libnx gives new pthreads every permitted core. Only graphics opt into core 3. */
 Result __wrap_svcSetThreadCoreMask( Handle handle, s32 core, u32 mask )
 {
-    if (core == 3) core = -1;
-    return __real_svcSetThreadCoreMask( handle, core, mask & ~8u );
+    if (core == 3 && !(wine_nx_application_core_mask & 8)) core = -1;
+    return __real_svcSetThreadCoreMask( handle, core, mask & wine_nx_application_core_mask );
+}
+
+void wine_nx_thread_configure_policy( int policy )
+{
+    char line[160];
+    u64 mask = 0;
+    worker_policy = policy >= 0 && policy <= 4 && four_cores_enabled ? policy : 0;
+    wine_nx_application_core_mask = 7;
+    if (nx_thread_kernel_policy(worker_policy) && R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)))
+        wine_nx_application_core_mask = (unsigned int)mask & 15;
+    snprintf(line, sizeof(line), "[SCHED] requested=%d effective=%d app_mask=%x helper_mask=%x helper_priority=63",
+             policy, worker_policy, wine_nx_application_core_mask, worker_policy == 2 || worker_policy == 4 ? 15 : 8);
+    wine_nx_runtime_trace(line);
 }
 
 int wine_nx_four_cores_available( void )
@@ -131,12 +340,11 @@ static int offload_thread_locked( struct nx_prof_thread *thread )
     if (!four_cores_enabled || thread->fixed || thread->helper) return 0;
     if (R_FAILED( svcGetThreadCoreMask( &thread->app_core, &thread->app_mask, thread->handle ) ) ||
         R_FAILED( svcGetThreadPriority( &thread->app_priority, thread->handle ) )) return -1;
-    if (R_FAILED( __real_svcSetThreadCoreMask( thread->handle, 3, 8 ) )) return -1;
+    /* Lower priority before allowing core 3; preserve the old pair on failure. */
     if (R_FAILED( svcSetThreadPriority( thread->handle, 63 ) ))
-    {
-        svcSetThreadCoreMask( thread->handle, thread->app_core, thread->app_mask );
         return -1;
-    }
+    if (R_FAILED( __real_svcSetThreadCoreMask( thread->handle, 3, worker_policy == 2 || worker_policy == 4 ? 15 : 8 ) ))
+    { svcSetThreadPriority(thread->handle, thread->app_priority); return -1; }
     thread->helper = 1;
     return 1;
 }
@@ -166,11 +374,11 @@ void wine_nx_thread_set_name( unsigned int tid, const char *name )
 
         if (!thread->handle || thread->kind != 'w' || thread->tid != tid) continue;
         snprintf( thread->name, sizeof(thread->name), "%s", name );
-        if (nx_thread_graphics_worker( name ))
+        if (nx_thread_policy_helper( worker_policy, name ))
         {
             if ((moved = offload_thread_locked( thread )))
                 snprintf( line, sizeof(line), "[CORES] %u %s: %s", tid, name,
-                          moved > 0 ? "core 3, priority 63" : "could not offload graphics worker" );
+                          moved > 0 ? (worker_policy == 2 || worker_policy == 4 ? "cores 0-3, priority 63" : "core 3, priority 63") : "could not offload worker" );
         }
         else if (thread->helper) restore_thread_locked( thread, thread->app_core, thread->app_mask );
         break;
@@ -183,7 +391,7 @@ void wine_nx_thread_set_affinity( unsigned int tid, unsigned int mask )
 {
     unsigned int i;
 
-    mask &= 7;
+    mask &= wine_nx_application_core_mask;
     if (!mask) return;
     pthread_mutex_lock( &registry_mutex );
     for (i = 0; i < NX_PROF_MAX_THREADS; i++)
@@ -247,7 +455,7 @@ void wine_nx_thread_register( char kind, unsigned int tid, void *teb )
         if (kind == 'c')
         {
             snprintf( registry[slot].name, sizeof(registry[slot].name), "compositor" );
-            offload_thread_locked( &registry[slot] );
+            if (!worker_policy) offload_thread_locked( &registry[slot] );
         }
     }
     pthread_mutex_unlock( &registry_mutex );
@@ -304,6 +512,18 @@ unsigned int wine_nx_threads_other( void )
 
 void wine_nx_thread_unregister( void )
 {
+    Handle trace_handle = threadGetCurHandle();
+    pthread_mutex_lock(&request_trace.mutex);
+    for (unsigned int slot=0; slot<NX_REQUEST_SLOTS; ++slot)
+        if (request_trace.rows[slot].handle == trace_handle) request_trace.rows[slot].token=0;
+    pthread_mutex_unlock(&request_trace.mutex);
+    if(pending_current)
+    {
+        pthread_mutex_lock(&wait_mutex);
+        __atomic_store_n(&pending_current->active,0,__ATOMIC_RELEASE);
+        pending_current->handle=0; pending_current=NULL;
+        pthread_mutex_unlock(&wait_mutex);
+    }
     Handle handle = threadGetCurHandle();
     unsigned int i;
 
@@ -580,6 +800,12 @@ static void name_site( uint32_t site, int guest, char *buf, size_t size )
  * long enough to read it, as the sampler does, and set going again. */
 void wine_nx_threads_report_stalled( void )
 {
+    if (!wine_nx_stall_snapshots_enabled)
+    {
+        wine_nx_runtime_trace("[STALL] paused snapshots disabled; reporting passive waits only");
+        pending_wait_report();
+        return;
+    }
     Handle self = threadGetCurHandle();
     unsigned int i, reported = 0;
 
@@ -819,6 +1045,48 @@ void wine_nx_thread_report( void )
     pthread_mutex_unlock( &registry_mutex );
     if (!interval) return;
 
+    mesa_worker_report(interval);
+    pending_wait_report();
+    {
+        struct nx_shader_cache_stats hot = wine_nx_shader_ram_stats();
+        snprintf(line, sizeof(line), "[SHADER-RAM] bytes=%zu budget=%zu hits=%llu misses=%llu puts=%llu evictions=%llu",
+                 hot.bytes, hot.budget, (unsigned long long)hot.hits, (unsigned long long)hot.misses,
+                 (unsigned long long)hot.puts, (unsigned long long)hot.evictions);
+        if (hot.budget) wine_nx_runtime_trace(line);
+    }
+    {
+        static u64 idle_last[4];
+        unsigned int core;
+        s32 own_core = -1;
+        u64 own_mask = 0;
+        /* The kernel tells a core's idle time only to a thread running on it, so
+         * this thread visits each core it may use and then goes back to its own
+         * placement. Without the visit only whichever core it happened to be on
+         * was reported, and core 3 never. */
+        int visit = R_SUCCEEDED( svcGetThreadCoreMask( &own_core, &own_mask, CUR_THREAD_HANDLE ) ) && own_mask;
+
+        for (core = 0; core < 4; core++)
+        {
+            u64 idle = 0;
+            Result rc = MAKERESULT( Module_Kernel, KernelError_InvalidCombination );
+            unsigned int idle_permille;
+
+            if (!visit || !(wine_nx_application_core_mask & (1u << core))) { idle_last[core] = 0; continue; }
+            if (R_SUCCEEDED( __real_svcSetThreadCoreMask( CUR_THREAD_HANDLE, (s32)core, 1u << core ) ) &&
+                svcGetCurrentProcessorNumber() == core)
+                rc = svcGetInfo(&idle, InfoType_IdleTickCount, INVALID_HANDLE, (u64)-1);
+            idle_permille = nx_prof_permille(idle, idle_last[core], interval);
+            if (R_SUCCEEDED(rc) && idle_last[core])
+            {
+                snprintf(line, sizeof(line), "[SYSTEM-CPU] core=%u busy_permille=%u source=kernel-idle-ticks scope=all-processes",
+                         core, idle_permille > 1000 ? 0 : 1000 - idle_permille);
+                wine_nx_runtime_trace(line);
+            }
+            idle_last[core] = R_SUCCEEDED(rc) ? idle : 0;
+        }
+        if (visit) __real_svcSetThreadCoreMask( CUR_THREAD_HANDLE, own_core, (u32)own_mask );
+    }
+
     /* tid, w (Wine) or s (server connection), @core, share of that core. */
     len = appendf( line, 0, "[THREADS] %u threads use %u.%02u cores:", count, total / 1000, total % 1000 / 10 );
     for (i = 0; i < count && i < 12 && rows[i].permille >= 5; i++)
@@ -828,6 +1096,18 @@ void wine_nx_thread_report( void )
     wine_nx_runtime_trace( line );
     if (profiling) server_report();
     if (profiling) profile_report( rows, count );
+    /* Bounded placement evidence. @core above is preferred, not residency. */
+    for (i = 0; i < count && i < 12 && rows[i].permille >= 5; i++)
+    {
+        s32 preferred = -1, priority = -1;
+        u64 affinity = 0;
+        Result core_rc = svcGetThreadCoreMask(&preferred, &affinity, rows[i].handle);
+        Result priority_rc = svcGetThreadPriority(&priority, rows[i].handle);
+        snprintf(line, sizeof(line), "[SCHED-THREAD] tid=%u kind=%c handle=%x preferred=%d mask=%llx priority=%d cpu_permille=%u core_result=%08x priority_result=%08x",
+                 rows[i].tid, rows[i].kind, rows[i].handle, preferred, (unsigned long long)affinity,
+                 priority, rows[i].permille, core_rc, priority_rc);
+        wine_nx_runtime_trace(line);
+    }
 }
 
 /* Names the threads that did not stop, so the wait they are in can be found. */
@@ -875,9 +1155,14 @@ void wine_nx_thread_balance( void )
     u64 now = armGetSystemTick(), interval = last ? now - last : 0, process_mask, mask;
     char line[NX_PROF_LINE + 24];
     int len, urgent = 0;
+    /* With the cores shared (policy 4) a thread keeps its wide mask and only
+     * the core it prefers is chosen here: the kernel moves a thread to a core
+     * that falls idle, but never spreads busy threads that prefer the same one. */
+    const int hints = worker_policy == 4;
 
     last = now;
-    if (!wine_nx_balance_enabled || R_FAILED( svcGetInfo( &process_mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0 ) ))
+    if ((nx_thread_kernel_policy(worker_policy) && !hints) || !wine_nx_balance_enabled ||
+        R_FAILED( svcGetInfo( &process_mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0 ) ))
         return;
     process_mask &= 7;
     for (i = 0; i < 64 && cores < NX_BALANCE_MAX_CORES; i++)
@@ -902,8 +1187,13 @@ void wine_nx_thread_balance( void )
         balance[count].load = loads[i];
         balance[count].fixed = thread->fixed;
         balance[count].core = -1;
-        if (R_SUCCEEDED( svcGetThreadCoreMask( &core, &mask, thread->handle ) ) && mask && !(mask & (mask - 1)))
-            for (j = 0; j < cores; j++) if (mask == 1ull << core_ids[j]) balance[count].core = (int)j;
+        if (R_SUCCEEDED( svcGetThreadCoreMask( &core, &mask, thread->handle ) ) && mask &&
+            (hints || !(mask & (mask - 1))))
+            for (j = 0; j < cores; j++)
+                if (hints ? core == (s32)core_ids[j] : mask == 1ull << core_ids[j]) balance[count].core = (int)j;
+        /* Choosing preferred cores is for the few threads that fill one: a
+         * thread under a tenth of a core stays with the core it has. */
+        if (hints && balance[count].core >= 0 && loads[i] < NX_BALANCE_HINT_HEAVY) balance[count].fixed = 1;
         for (j = 0; j < NX_PROF_MAX_THREADS; j++)
             if (registry[j].handle && registry[j].kind == 's' && registry[j].tid == thread->tid)
                 balance[count].load += loads[j];
@@ -916,12 +1206,13 @@ void wine_nx_thread_balance( void )
         return;
     }
     after = nx_balance_assign( balance, count, cores, &before );
-    if (!urgent && after + 5 * NX_BALANCE_SLACK / 3 >= before)
+    if (!urgent && after + (hints ? NX_BALANCE_HINT_GAIN : 5 * NX_BALANCE_SLACK / 3) >= before)
     {
         pthread_mutex_unlock( &registry_mutex );
         return;
     }
-    len = appendf( line, 0, "[BALANCE] busiest core %u.%u%% -> %u.%u%%:", before / 10, before % 10, after / 10, after % 10 );
+    len = appendf( line, 0, "[BALANCE] %sbusiest core %u.%u%% -> %u.%u%%:", hints ? "preferred cores, " : "",
+                   before / 10, before % 10, after / 10, after % 10 );
     for (i = 0; i < count; i++)
     {
         struct nx_prof_thread *thread = &registry[owner[i]];
@@ -929,10 +1220,22 @@ void wine_nx_thread_balance( void )
 
         if (balance[i].new_core < 0 || balance[i].new_core == balance[i].core) continue;
         core_id = core_ids[balance[i].new_core];
-        if (R_FAILED( svcSetThreadCoreMask( thread->handle, (s32)core_id, 1u << core_id ) )) continue;
-        /* Still registered, so its TEB is still there. */
-        if (thread->teb && &horizon_follow_thread_cores)
-            horizon_follow_thread_cores( (void *)(uintptr_t)thread->teb, 1u << core_id );
+        if (hints)
+        {
+            s32 was;
+
+            if (R_FAILED( svcGetThreadCoreMask( &was, &mask, thread->handle ) ) || !(mask & (1ull << core_id)) ||
+                R_FAILED( __real_svcSetThreadCoreMask( thread->handle, (s32)core_id, (u32)mask ) )) continue;
+            if (thread->teb && &horizon_follow_thread_cores)
+                horizon_follow_thread_cores( (void *)(uintptr_t)thread->teb, (unsigned int)mask | (core_id + 1) << 8 );
+        }
+        else
+        {
+            if (R_FAILED( svcSetThreadCoreMask( thread->handle, (s32)core_id, 1u << core_id ) )) continue;
+            /* Still registered, so its TEB is still there. */
+            if (thread->teb && &horizon_follow_thread_cores)
+                horizon_follow_thread_cores( (void *)(uintptr_t)thread->teb, 1u << core_id );
+        }
         if (balance[i].core >= 0)
             len = appendf( line, len, " %uw %u->%u %u.%u%%", thread->tid, core_ids[balance[i].core], core_id,
                            balance[i].load / 10, balance[i].load % 10 );

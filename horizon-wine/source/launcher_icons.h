@@ -9,6 +9,10 @@ struct launcher_svg_icon
     const char *d;
 };
 
+/* assets/download.svg: Original Autorun Steam integration download glyph. */
+static const struct launcher_svg_icon icon_download =
+    { 0, 0, 24, 24, "M10 3h4v8l3-3 2 2-7 7-7-7 2-2 3 3V3zM3 18h3v3h12v-3h3v6H3z" };
+
 /* assets/gamepad-modern.svg: Font Awesome Pro 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2025 Fonticons, Inc. */
 static const struct launcher_svg_icon icon_gamepad_modern =
     { 0, 0, 576, 512, "M360 32c119.3 0 216 96.7 216 216l0 129c0 56.9-46.1 103-103 103-44.3 0-83.7-28.4-97.8-70.4l-8.5-25.6-157.4 0-8.5 25.6C186.8 451.6 147.4 480 103 480 46.1 480 0 433.9 0 377L0 248C0 128.7 96.7 32 216 32l144 0zM216 80C123.2 80 48 155.2 48 248l0 129c0 30.4 24.6 55 55 55 23.7 0 44.7-15.2 52.2-37.6l14-42 1.5-3.5C174.8 341.1 183 336 192 336l192 0c10.3 0 19.5 6.6 22.8 16.4l14 42c7.5 22.5 28.5 37.6 52.2 37.6 30.4 0 55-24.6 55-55l0-129c0-92.8-75.2-168-168-168L216 80zm-56 72c13.3 0 24 10.7 24 24l0 24 24 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-24 0 0 24c0 13.3-10.7 24-24 24s-24-10.7-24-24l0-24-24 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l24 0 0-24c0-13.3 10.7-24 24-24zM384 288a32 32 0 1 1 0-64 32 32 0 1 1 0 64zm48-80a32 32 0 1 1 0-64 32 32 0 1 1 0 64z" };

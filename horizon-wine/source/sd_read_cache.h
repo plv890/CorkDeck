@@ -166,6 +166,7 @@ struct sd_cache_file
     long long fill_end;      /* where the last fill ended: a miss there reads on in order */
     int size_known;          /* a fill came back short: the file ends at size */
     long long size;
+    long long reopen_at;     /* where it stood when the card had to be mounted again */
     struct sd_cache_line lines[SD_CACHE_LINES];
     struct sd_cache_file *next;
 };

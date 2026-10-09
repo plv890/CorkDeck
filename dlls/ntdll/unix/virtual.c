@@ -2477,6 +2477,16 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
  */
 static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot )
 {
+#ifdef __SWITCH__
+    /* Unlike Unix mprotect, Horizon may allocate physical backing here. Do not
+     * advertise committed pages after that allocation failed: a later retry
+     * must still see the original reservation and protection metadata. */
+    BYTE local_old[512], *old = local_old;
+    size_t pages = size >> page_shift, i;
+    int failed, saved_errno;
+    if (pages > sizeof(local_old) && !(old = malloc(pages))) { errno = ENOMEM; return FALSE; }
+    for (i = 0; i < pages; ++i) old[i] = get_page_vprot((char *)base + (i << page_shift));
+#endif
     if (!use_kernel_writewatch && view->protect & VPROT_WRITEWATCH)
     {
         /* each page may need different protections depending on write watch flag */
@@ -2491,7 +2501,23 @@ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vpr
         else if (use_kernel_writewatch && view->protect & VPROT_WRITEWATCH) vprot &= ~VPROT_WRITEWATCH;
         set_page_vprot( base, size, vprot );
     }
+#ifdef __SWITCH__
+    failed = mprotect_range(base, size, 0, 0);
+    saved_errno = errno;
+    if (failed)
+    {
+        for (i = 0; i < pages; ++i) set_page_vprot((char *)base + (i << page_shift),
+                                                (size_t)1 << page_shift, old[i]);
+        /* Previously committed pages already have backing; PROT_NONE restores
+         * any newly mapped prefix without allocating more backing. */
+        mprotect_range(base, size, 0, 0);
+    }
+    if (old != local_old) free(old);
+    errno = saved_errno;
+    return !failed;
+#else
     return !mprotect_range( base, size, 0, 0 );
+#endif
 }
 
 
@@ -2516,7 +2542,15 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
         if ((view->protect & access) != access) return STATUS_INVALID_PAGE_PROTECTION;
     }
 
-    if (!set_vprot( view, base, size, vprot | VPROT_COMMITTED )) return STATUS_ACCESS_DENIED;
+    if (!set_vprot( view, base, size, vprot | VPROT_COMMITTED ))
+    {
+#ifdef __SWITCH__
+        /* Horizon also allocates backing memory while committing a reservation.
+         * Exhaustion is not a permission denial. */
+        if (errno == ENOMEM) return STATUS_NO_MEMORY;
+#endif
+        return STATUS_ACCESS_DENIED;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -4090,6 +4124,17 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
         }
 
         pe_mapping->image.base = wine_server_client_ptr( view->base );
+#ifdef __SWITCH__
+        {
+            /* horizon-wine/source/runtime.c: kept for the report of what a program loaded. */
+            extern void wine_nx_note_image( const WCHAR *name, unsigned int chars, void *base, SIZE_T size )
+                __attribute__((weak));
+
+            if (&wine_nx_note_image)
+                wine_nx_note_image( pe_mapping->nt_name.Buffer, pe_mapping->nt_name.Length / sizeof(WCHAR),
+                                    view->base, size );
+        }
+#endif
         SERVER_START_REQ( map_image_view )
         {
             req->mapping = wine_server_obj_handle( mapping );
@@ -6460,7 +6505,7 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
 
             if (__atomic_add_fetch( &logs, 1, __ATOMIC_RELAXED ) <= 32)
             {
-                snprintf( msg, sizeof(msg), "[VA] out of address space: %lu KB (type %#x) at %p below %p",
+                snprintf( msg, sizeof(msg), "[VA] allocation failed: %lu KB (type %#x) at %p below %p",
                           (unsigned long)(size >> 10), (unsigned int)type, base, (void *)limit_high );
                 wine_nx_runtime_trace( msg );
                 if (logs == 1) wine_nx_log_views();

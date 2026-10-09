@@ -29,6 +29,7 @@ parser.add_argument('--vulkan', action='store_true', help='The NRO is linked wit
 parser.add_argument('--dxvk', action='store_true', help='The NRO runs the bundled DXVK (requires --vulkan)')
 parser.add_argument('--vkd3d', action='store_true', help='The NRO runs the bundled VKD3D-Proton (requires --dxvk)')
 parser.add_argument('--fex', action='store_true', help='The NRO runs the FEX CPU modules')
+parser.add_argument('--steamworks-local', type=Path, help='Verified source-built local SDK component directory')
 args = parser.parse_args()
 wine_source = args.wine_source.resolve()
 if args.output and args.stage_output:
@@ -99,6 +100,21 @@ for name in ('fonts', 'nls'):
         if name == 'fonts':
             stage_file(path, drive / 'windows/fonts' / path.name)
 stage_file(nro, stage / nro.name)
+if args.steamworks_local:
+    component = args.steamworks_local
+    metadata = json.loads((component / 'build.json').read_text())
+    if metadata.get('state') != 'complete':
+        raise ValueError('Incomplete local Steamworks build')
+    for record in metadata['files']:
+        source = component / record['file']
+        if record['file'] not in ('steam_api.dll', 'steam_api64.dll') or hashlib.sha256(source.read_bytes()).hexdigest() != record['sha256']:
+            raise ValueError('Local Steamworks payload mismatch')
+        stage_file(source, stage / 'steamworks-local' / source.name)
+    stage_file(component / 'build.json', stage / 'steamworks-local/build.json')
+    stage_file(component / 'COPYING.LESSER', stage / 'licenses/Steamworks-reference-LGPL-3.0.txt')
+    stage_file(component / 'SDK-NOTICE.txt', stage / 'licenses/Steamworks-SDK-NOTICE.txt')
+    for name in ('local.cpp', 'generate.py', 'build.py', 'probe.cpp', 'pe.py', 'check.py'):
+        stage_file(horizon_wine.parent / 'tools/steamworks' / name, stage / 'steamworks-local/source' / name)
 licenses = stage / 'licenses'
 stage_file(build / 'licenses/FFmpeg-LGPL-2.1.txt', licenses / 'FFmpeg-LGPL-2.1.txt')
 if lsfg_revision:
@@ -116,7 +132,7 @@ manifest = {
     'wine': subprocess.check_output(['git', '-C', str(wine_source), 'rev-parse', 'HEAD'], text=True).strip(),
     'features': {'amd64': True, 'dynarec': enabled('WINE_NX_BOX64_DYNAREC'),
                  'vulkan': args.vulkan, 'dxvk': args.dxvk, 'vkd3d': args.vkd3d,
-                 'lsfg': bool(lsfg_revision), 'fex': args.fex},
+                 'lsfg': bool(lsfg_revision), 'fex': args.fex, 'local_steamworks': bool(args.steamworks_local)},
     'mesa_switch': mesa_revision,
     'lsfg': {'repository': 'https://git.lsfg-vk.dev/lsfg-vk-archive.git',
              'revision': lsfg_revision,

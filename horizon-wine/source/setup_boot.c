@@ -327,7 +327,7 @@ static int loader_kip(const char *path)
     const char *name = strrchr(path, '/');
     name = name ? name + 1 : path;
     return !strcasecmp(name, "loader.kip") || !strcasecmp(name, "hoc.kip") ||
-           !strcasecmp(name, "autorun.kip");
+           !strcasecmp(name, "autorun.kip") || !strcasecmp(name, "autorun-loader.kip");
 }
 
 static int managed_entry(const struct buffer *ini, const struct setup_boot_entry *entry)

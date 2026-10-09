@@ -11,12 +11,32 @@
 
 int wine_nx_four_cores_available( void );
 void wine_nx_thread_configure_cores( int enabled );
+/* Experimental, restart-only policy. 0 legacy, 1 background core 3,
+ * 2 background shared cores, 3 kernel scheduling on all permitted cores,
+ * 4 shared Wine/Mesa cores with background preferred core 3. */
+void wine_nx_thread_configure_policy( int policy );
+extern unsigned int wine_nx_application_core_mask;
+static inline int nx_thread_background_worker( const char *name )
+{
+    return !strcmp(name, "dxvk-shader-l") || !strcmp(name, "dxvk-shader-h") ||
+           !strcmp(name, "dxvk-cache");
+}
 void wine_nx_thread_set_name( unsigned int tid, const char *name );
 void wine_nx_thread_set_affinity( unsigned int tid, unsigned int mask );
 
 static inline int nx_thread_graphics_worker( const char *name )
 {
     return !strcmp( name, "dxvk-cs" ) || !strcmp( name, "wined3d_cs" ) || !strcmp( name, "vkd3d_queue" );
+}
+static inline int nx_thread_policy_helper( int policy, const char *name )
+{
+    return policy == 0 ? nx_thread_graphics_worker(name) :
+           (policy == 1 || policy == 2 || policy == 4) && nx_thread_background_worker(name);
+}
+
+static inline int nx_thread_kernel_policy( int policy )
+{
+    return policy == 3 || policy == 4;
 }
 
 static inline int nx_thread_helper_available( uint64_t cores, uint64_t priorities )
@@ -55,6 +75,7 @@ void wine_nx_thread_affinity_fixed( void );
  * ([BALANCE]). Cleared by sdmc:/switch/wine/no-balance.txt. */
 void wine_nx_thread_balance( void );
 extern int wine_nx_balance_enabled;
+extern int wine_nx_stall_snapshots_enabled;
 
 /* The balancer's view of a thread: load in thousandths of a core, core an index
  * into the process's cores or -1 where the thread may run on any of them. */
@@ -67,6 +88,9 @@ struct nx_balance_thread
 #define NX_BALANCE_MAX_CORES 8
 #define NX_BALANCE_LIGHT     10  /* a thread below 1% of a core stays where it is */
 #define NX_BALANCE_SLACK     30  /* a core must be 3% less loaded to be preferred */
+/* Choosing preferred cores under the shared-cores policy: */
+#define NX_BALANCE_HINT_HEAVY 100  /* only threads using a tenth of a core are placed */
+#define NX_BALANCE_HINT_GAIN  150  /* and only when the busiest core gets 15% lighter */
 
 /* Threads the program pinned, and light ones already on a core, stay; the rest
  * go heaviest first to the least loaded core, keeping their own unless another

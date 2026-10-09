@@ -1,0 +1,137 @@
+diff --git a/src/util/disk_cache.c b/src/util/disk_cache.c
+index 534fa61..0fc485f 100644
+--- a/src/util/disk_cache.c
++++ b/src/util/disk_cache.c
+@@ -343,6 +343,10 @@ disk_cache_create_custom(const char *gpu_name, const char *driver_id,
+ void
+ disk_cache_destroy(struct disk_cache *cache)
+ {
++#if defined(__SWITCH__)
++   extern void wine_nx_shader_ram_forget(const void *) __attribute__((weak));
++   if (cache && wine_nx_shader_ram_forget) wine_nx_shader_ram_forget(cache);
++#endif
+    if (unlikely(cache && cache->stats.enabled)) {
+       mesa_logi("disk shader cache:  hits = %u, misses = %u\n",
+                 cache->stats.hits,
+@@ -588,6 +592,11 @@ disk_cache_put(struct disk_cache *cache, const cache_key key,
+                const void *data, size_t size,
+                struct cache_item_metadata *cache_item_metadata)
+ {
++#if defined(__SWITCH__)
++   extern void wine_nx_shader_ram_put(const void *, const void *, size_t, const void *, size_t) __attribute__((weak));
++   if (util_queue_is_initialized(&cache->cache_queue) && wine_nx_shader_ram_put)
++      wine_nx_shader_ram_put(cache, key, CACHE_KEY_SIZE, data, size);
++#endif
+    if (!util_queue_is_initialized(&cache->cache_queue))
+       return;
+ 
+@@ -606,6 +615,11 @@ disk_cache_put_nocopy(struct disk_cache *cache, const cache_key key,
+                       void *data, size_t size,
+                       struct cache_item_metadata *cache_item_metadata)
+ {
++#if defined(__SWITCH__)
++   extern void wine_nx_shader_ram_put(const void *, const void *, size_t, const void *, size_t) __attribute__((weak));
++   if (util_queue_is_initialized(&cache->cache_queue) && wine_nx_shader_ram_put)
++      wine_nx_shader_ram_put(cache, key, CACHE_KEY_SIZE, data, size);
++#endif
+    if (!util_queue_is_initialized(&cache->cache_queue)) {
+       free(data);
+       return;
+@@ -625,27 +639,44 @@ void *
+ disk_cache_get(struct disk_cache *cache, const cache_key key, size_t *size)
+ {
+    void *buf = NULL;
++   size_t hot_size = 0;
++#if defined(__SWITCH__)
++   extern void *wine_nx_shader_ram_get(const void *, const void *, size_t, size_t *) __attribute__((weak));
++   extern void wine_nx_shader_ram_put(const void *, const void *, size_t, const void *, size_t) __attribute__((weak));
++   if (wine_nx_shader_ram_get)
++      buf = wine_nx_shader_ram_get(cache, key, CACHE_KEY_SIZE, &hot_size);
++   if (buf) {
++      if (size) *size = hot_size;
++      if (unlikely(cache->stats.enabled)) p_atomic_inc(&cache->stats.hits);
++      return buf;
++   }
++#endif
+ 
+    if (size)
+       *size = 0;
+ 
+    if (cache->foz_ro_cache)
+-      buf = disk_cache_load_item_foz(cache->foz_ro_cache, key, size);
++      buf = disk_cache_load_item_foz(cache->foz_ro_cache, key, &hot_size);
+ 
+    if (!buf) {
+       if (cache->blob_get_cb) {
+-         buf = blob_get_compressed(cache, key, size);
++         buf = blob_get_compressed(cache, key, &hot_size);
+       } else if (cache->type == DISK_CACHE_SINGLE_FILE) {
+-         buf = disk_cache_load_item_foz(cache, key, size);
++         buf = disk_cache_load_item_foz(cache, key, &hot_size);
+       } else if (cache->type == DISK_CACHE_DATABASE) {
+-         buf = disk_cache_db_load_item(cache, key, size);
++         buf = disk_cache_db_load_item(cache, key, &hot_size);
+       } else if (cache->type == DISK_CACHE_MULTI_FILE) {
+          char *filename = disk_cache_get_cache_filename(cache, key);
+          if (filename)
+-            buf = disk_cache_load_item(cache, filename, size);
++            buf = disk_cache_load_item(cache, filename, &hot_size);
+       }
+    }
+ 
++   if (size) *size = hot_size;
++#if defined(__SWITCH__)
++   if (buf && wine_nx_shader_ram_put)
++      wine_nx_shader_ram_put(cache, key, CACHE_KEY_SIZE, buf, hot_size);
++#endif
+    if (unlikely(cache->stats.enabled)) {
+       if (buf)
+          p_atomic_inc(&cache->stats.hits);
+diff --git a/src/util/u_queue.c b/src/util/u_queue.c
+index 4771458..16dd210 100644
+--- a/src/util/u_queue.c
++++ b/src/util/u_queue.c
+@@ -42,6 +42,9 @@
+ #endif
+ 
+ #if defined(__SWITCH__)
++   extern int wine_nx_mesa_worker_start(const char *, unsigned, int) __attribute__((weak));
++   extern void wine_nx_mesa_worker_end(void) __attribute__((weak));
++   extern void wine_nx_mesa_worker_job(void) __attribute__((weak));
+ #include <switch.h>
+ #endif
+ 
+@@ -274,7 +277,10 @@ util_queue_thread_func(void *input)
+    {
+       const u64 hos_affinity = (1u << 1) | (1u << 2);
+       const int pref_core    = 1 + (thread_index & 1);
+-      svcSetThreadCoreMask(CUR_THREAD_HANDLE, pref_core, hos_affinity);
++      if (!wine_nx_mesa_worker_start ||
++          !wine_nx_mesa_worker_start(queue->name, thread_index,
++                                    !!(queue->flags & UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY)))
++         svcSetThreadCoreMask(CUR_THREAD_HANDLE, pref_core, hos_affinity);
+    }
+ #endif
+ 
+@@ -320,6 +326,10 @@ util_queue_thread_func(void *input)
+       mtx_unlock(&queue->lock);
+ 
+       if (job.job) {
++#if defined(__SWITCH__)
++         if (wine_nx_mesa_worker_job)
++            wine_nx_mesa_worker_job();
++#endif
+          job.execute(job.job, job.global_data, thread_index);
+          if (job.fence)
+             util_queue_fence_signal(job.fence);
+@@ -343,6 +353,10 @@ util_queue_thread_func(void *input)
+       queue->num_queued = 0;
+    }
+    mtx_unlock(&queue->lock);
++#if defined(__SWITCH__)
++   if (wine_nx_mesa_worker_end)
++      wine_nx_mesa_worker_end();
++#endif
+    return 0;
+ }
+ 

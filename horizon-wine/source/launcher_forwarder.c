@@ -135,8 +135,8 @@ static void panel( struct ui *ui, SDL_Texture *background, SDL_Rect rect, const 
     else ui_background( ui );
     ui_fill( ui, 0, 0, ui->width, ui->height, (SDL_Color){ 4, 7, 11, 205 } );
     ui_rounded( ui, rect.x + 6, rect.y + 10, rect.w, rect.h, 24, (SDL_Color){ 0, 0, 0, 120 } );
-    ui_rounded( ui, rect.x, rect.y, rect.w, rect.h, 24, (SDL_Color){ 22, 27, 30, 255 } );
-    ui_outline( ui, rect.x, rect.y, rect.w, rect.h, 24, 1, (SDL_Color){ 236, 240, 246, 100 } );
+    ui_rounded( ui, rect.x, rect.y, rect.w, rect.h, 24, (SDL_Color){ 24, 33, 44, 255 } );
+    ui_outline( ui, rect.x, rect.y, rect.w, rect.h, 24, 2, (SDL_Color){ 58, 76, 98, 255 } );
     ui_text( ui, ui->normal, rect.x + 28, rect.y + 24, title, ui->value );
 }
 
@@ -236,7 +236,7 @@ void launcher_forwarder_run( struct ui *ui, const struct wine_nx_launcher_option
     SDL_Texture *background = keep_background( ui ), *preview = NULL;
     SDL_Rect card = { (ui->width - 760) / 2, (ui->height - 428) / 2, 760, 428 };
     SDL_Rect rows[4];
-    char name[128], author[128] = "Autorun", path[512], edited[128];
+    char name[128], author[128] = "CorkDeck", path[512], edited[128];
     int selected = 1, right = 1, i, updated;
 
     if (!game->id || !options->install_game_forwarder) goto done;
@@ -297,8 +297,8 @@ void launcher_forwarder_run( struct ui *ui, const struct wine_nx_launcher_option
                 unsigned char *jpeg = NULL;
                 size_t bytes = 0;
                 const char *warning = options->emummc > 0 ?
-                    "Install this HOME Menu shortcut? Autorun's main forwarder will also be installed if missing." :
-                    "Installing unofficial titles can lead to a console ban. Use emuMMC. Autorun's main forwarder will also be installed if missing.";
+                    "Install this HOME Menu shortcut? CorkDeck's main forwarder will also be installed if missing." :
+                    "Installing unofficial titles can lead to a console ban. Use emuMMC. CorkDeck's main forwarder will also be installed if missing.";
                 if (!name[strspn( name, " \t\r\n" )]) ui_message( ui, "Forwarder", "Enter a name first." );
                 else if (ui_confirm( ui, "Install game forwarder?", warning, "Install" ))
                 {

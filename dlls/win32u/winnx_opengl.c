@@ -119,6 +119,7 @@ static void nx_drawable_flush( struct opengl_drawable *base, UINT flags )
 /* Frames presented and the time inside eglSwapBuffers, for [PROGRESS]. */
 extern unsigned long long horizon_interrupt_time(void);
 unsigned int wine_nx_gl_swaps;
+unsigned int wine_nx_gl_successful_swaps;
 unsigned long long wine_nx_gl_swap_time;  /* 100 ns */
 
 /* The floating keyboard (horizon-wine/source/osk.c), put into the back
@@ -256,6 +257,7 @@ static BOOL nx_drawable_swap( struct opengl_drawable *base )
     ret = funcs->p_eglSwapBuffers( egl->display, base->surface );
     __atomic_add_fetch( &wine_nx_gl_swap_time, horizon_interrupt_time() - start, __ATOMIC_RELAXED );
     __atomic_add_fetch( &wine_nx_gl_swaps, 1, __ATOMIC_RELAXED );
+    if (ret) __atomic_add_fetch( &wine_nx_gl_successful_swaps, 1, __ATOMIC_RELAXED );
     return ret;
 }
 

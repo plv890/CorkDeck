@@ -90,7 +90,7 @@ static unsigned server_queue_process_apc(HANDLE handle, const union apc_call *ca
     (void)handle; (void)call; (void)result; assert(0); return STATUS_NOT_IMPLEMENTED;
 }
 '''
-helpers = '\n'.join(block(source, name) for name in (
+helpers = block(source, 'static unsigned int horizon_token_read_access(') + '\n' + '\n'.join(block(source, name) for name in (
     'static struct horizon_server_handle_entry **horizon_server_handle_bucket(',
     'static struct horizon_server_handle_entry *horizon_server_find_handle_locked(',
     'static void horizon_server_link_handle_locked(',
@@ -158,7 +158,9 @@ NTSTATUS WINAPI NtQueryInformationProcess(HANDLE handle, PROCESSINFOCLASS class,
 #undef __SWITCH__
 '''
 signal = (root / 'dlls/ntdll/unix/signal_arm64.c').read_text()
-contexts = signal[signal.index('static NTSTATUS check_current_thread_context_access('):signal.index('/* Windows leaves the wait')]
+contexts = '\n'.join(block(signal, name) for name in (
+    'static NTSTATUS check_thread_context_access(',
+    'NTSTATUS set_thread_wow64_context(', 'NTSTATUS get_thread_wow64_context('))
 context_fixture = r'''
 static TEB teb;
 #define NtCurrentTeb() (&teb)
@@ -170,9 +172,19 @@ static struct thread_data *get_thread_data(void) { return &thread_data; }
 static void *get_cpu_area(struct thread_data *data, USHORT machine) {
     assert(data == &thread_data && machine == IMAGE_FILE_MACHINE_I386); return &saved;
 }
+/* Remote snapshots are covered by check_wow64_thread_context.py. This fixture
+ * exercises the real access and alias paths with no remote backend attached. */
+#define horizon_trace(...) ((void)0)
+static NTSTATUS get_thread_context(HANDLE handle, void *ctx, BOOL *self, USHORT machine) {
+    (void)handle; (void)ctx; (void)self; (void)machine; return STATUS_NOT_IMPLEMENTED;
+}
+static NTSTATUS set_thread_context(HANDLE handle, const void *ctx, BOOL *self, USHORT machine) {
+    (void)handle; (void)ctx; (void)self; (void)machine; return STATUS_NOT_IMPLEMENTED;
+}
 '''
 tls_fixture = r'''
-#define ERR(...) ((void)0)
+static unsigned tls_query_errors;
+#define ERR(...) (++tls_query_errors)
 #define GetProcessHeap() ((HANDLE)1)
 static IMAGE_TLS_DIRECTORY test_tls_dir, *tls_dirs;
 static UINT tls_module_count;
@@ -254,6 +266,7 @@ static void test_dynamic_tls(void) {
     }
     assert(old[0][0] != old[1][0] && !tebs[2].ThreadLocalStoragePointer);
     assert(alloc_tls_slot(&module) && index == 1 && tls_module_count == 2);
+    assert(!tls_query_errors); /* Dead retained objects must not reach TLS queries. */
     for (i = 0; i < 2; ++i) {
         void **slots = tebs[i].ThreadLocalStoragePointer;
         assert(slots != old[i] && slots[0] == old[i][0]);
@@ -272,7 +285,8 @@ static void test_next_thread(void) {
     struct horizon_server_handle_entry *entry;
     struct horizon_server_object *saved_threads = horizon_server_threads;
     unsigned pid = connection.pid;
-    HANDLE next, previous = NULL, handles[3], process_handle;
+    HANDLE next, previous = NULL, handles[2], process_handle;
+    const unsigned live_indices[] = {0, 2};
     unsigned i;
     _Static_assert(HORIZON_REQ_GET_NEXT_THREAD == REQ_get_next_thread, "request number");
     _Static_assert(sizeof(struct horizon_get_next_thread_request) == sizeof(struct get_next_thread_request), "request size");
@@ -288,19 +302,31 @@ static void test_next_thread(void) {
     threads[3].thread.is_system = 1;
     threads[1].thread.terminated = 1;
     horizon_server_threads = &threads[3];
-    for (i = 0; i < 3; i++) {
+    /* A caller can retain an earlier handle after its thread exits. The
+     * cursor remains valid, but the next result must be a live thread. */
+    entry = horizon_server_create_handle_for_object_locked(&threads[1]);
+    previous = wine_server_ptr_handle(entry->handle);
+    assert(!NtGetNextThread(NtCurrentProcess(), previous, 0, 0, 0, &next));
+    assert(horizon_server_find_handle_locked(wine_server_obj_handle(next))->object == &threads[2]);
+    assert(!NtClose(next));
+    assert(!NtGetNextThread(NtCurrentProcess(), previous, 0, 0, 1, &next));
+    assert(horizon_server_find_handle_locked(wine_server_obj_handle(next))->object == &threads[0]);
+    assert(!NtClose(next) && !NtClose(previous));
+    assert(threads[1].refs == 1);
+    previous = NULL;
+    for (i = 0; i < 2; i++) {
         assert(!NtGetNextThread(NtCurrentProcess(), previous, THREAD_QUERY_INFORMATION, 0, 0, &next));
         entry = horizon_server_find_handle_locked(wine_server_obj_handle(next));
-        assert(entry && entry->object == &threads[i]);
+        assert(entry && entry->object == &threads[live_indices[i]]);
         assert(entry->access == (THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION));
         handles[i] = previous = next;
     }
     assert(NtGetNextThread(NtCurrentProcess(), previous, 0, 0, 0, &next) == STATUS_NO_MORE_ENTRIES && !next);
     previous = NULL;
-    for (i = 3; i--;) {
+    for (i = 2; i--;) {
         assert(!NtGetNextThread(NtCurrentProcess(), previous, 0, 0, 1, &next));
         entry = horizon_server_find_handle_locked(wine_server_obj_handle(next));
-        assert(entry->object == &threads[i] && !entry->access);
+        assert(entry->object == &threads[live_indices[i]] && !entry->access);
         previous = handles[i];
         horizon_server_unlink_handle_locked(entry);
         entry->object->refs--;
@@ -319,12 +345,12 @@ static void test_next_thread(void) {
     horizon_server_unlink_handle_locked(entry);
     entry->object->refs--;
     free(entry);
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 2; i++) {
         entry = horizon_server_find_handle_locked(wine_server_obj_handle(handles[i]));
         horizon_server_unlink_handle_locked(entry);
         entry->object->refs--;
         free(entry);
-        assert(threads[i].refs == 1);
+        assert(threads[live_indices[i]].refs == 1);
     }
     connection.pid = pid;
     horizon_server_threads = saved_threads;

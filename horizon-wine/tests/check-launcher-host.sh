@@ -23,7 +23,7 @@ shots="${LAUNCHER_SHOTS:-$build}"
 # The icons embedded in the launcher must match assets/, and fill as SVG does.
 python3 "$horizon_wine/tools/make-launcher-icons.py" --check
 clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-    "$horizon_wine/tests/launcher_svg.c" "$horizon_wine/source/launcher_svg.c" -o "$build/launcher_svg"
+    "$horizon_wine/tests/launcher_svg.c" "$horizon_wine/source/launcher_svg.c" -lm -o "$build/launcher_svg"
 "$build/launcher_svg"
 
 clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -66,9 +66,20 @@ clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-
     "$horizon_wine/source/launcher_graphics.c" "$horizon_wine/source/launcher_forwarder.c" "$horizon_wine/source/launcher_image.c" \
     "$horizon_wine/source/launcher_setup.c" "$horizon_wine/source/setup_boot.c" \
     "$horizon_wine/source/steamgriddb.c" \
+    "$horizon_wine/source/steam/steam_ui.c" \
+    "$horizon_wine/source/steam/steam_probe.c" \
+    "$horizon_wine/source/steam/steam_directory.c" \
+    "$horizon_wine/source/steam/steam_wire.c" "$horizon_wine/source/steam/steam_cm_message.c" \
+    "$horizon_wine/source/steam/steam_auth.c" "$horizon_wine/source/steam/steam_crypto.c" \
+    "$horizon_wine/source/steam/steam_cm.c" "$horizon_wine/source/steam/steam_provider.c" \
+    "$horizon_wine/source/steam/steam_library.c" "$horizon_wine/source/steam/steam_app.c" \
+    "$horizon_wine/source/steam/steam_family.c" "$horizon_wine/source/steam/steam_settings.c" "$horizon_wine/source/steam/steam_session.c" "$horizon_wine/source/steam/steam_device_key.c" \
+    "$horizon_wine/source/steam/steam_backend.c" "$horizon_wine/source/steam/steam_content.c" \
+    "$horizon_wine/source/steam/steam_manifest.c" "$horizon_wine/source/steam/steam_install.c" "$horizon_wine/source/steam/steam_local.c" \
+    "$horizon_wine/source/steam/steam_library_ui.c" \
     "$horizon_wine/source/launcher_svg.c" \
     "$build/forwarder-icon.c" \
-    $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -lturbojpeg -lcurl -L/opt/homebrew/opt/openssl/lib -lcrypto -lm -o "$build/launcher_host"
+    "$horizon_wine/vendor/qrcodegen/qrcodegen.c" $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -lturbojpeg -lcurl -lwslay -lmbedcrypto -lminizip -llzma -lzstd -lz -L/opt/homebrew/opt/openssl/lib -lcrypto -lm -o "$build/launcher_host"
 # sdl2-compat looks for SDL3 next to the program, not in Homebrew's lib folder.
 ln -s /opt/homebrew/lib/libSDL3.0.dylib "$build/libSDL3.dylib"
 

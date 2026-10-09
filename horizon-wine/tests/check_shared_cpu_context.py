@@ -34,7 +34,16 @@ fixture = r'''
 #include "ddk/wdm.h"
 #undef CONTEXT_XSTATE
 #define CONTEXT_XSTATE CONTEXT_AMD64_XSTATE
+/* Enable pure-C ARM64EC conversions on the x86-64 host after platform headers. */
+#ifndef __aarch64__
+#define __aarch64__
+#define NX_HOST_CONTEXT_ARCH
+#endif
 #include "unwind.h"
+#ifdef NX_HOST_CONTEXT_ARCH
+#undef __aarch64__
+#undef NX_HOST_CONTEXT_ARCH
+#endif
 #undef linux
 #undef __linux__
 #define HAS_FEATURE(...) TRUE
@@ -120,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix='wine-nx-shared-context-') as directory:
     path = Path(directory)
     (path / 'test.c').write_text(fixture + code + tests)
     subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11', '-g', '-O2',
-                    '-fms-extensions', '-fshort-wchar', '-fsanitize=address,undefined',
+                    '-fms-extensions', '-fshort-wchar', '-fsanitize=address,undefined', '-no-pie',
                     '-D__WINESRC__', '-D_WIN64', '-D__SWITCH__',
                     '-I' + str(root / 'include'), '-I' + str(root / 'dlls/ntdll'),
                     str(path / 'test.c'), '-o', str(path / 'test')], check=True)

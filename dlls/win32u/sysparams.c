@@ -165,7 +165,13 @@ static INT64 last_query_display_time;
 static UINT64 monitor_update_serial;
 static pthread_mutex_t display_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#ifdef __SWITCH__
+/* Horizon has one fixed-size EGL/NWindow output. Use Wine's framebuffer
+ * presentation and raw/virtual coordinate mapping when a guest changes mode. */
+BOOL emulate_modeset = TRUE;
+#else
 BOOL emulate_modeset = FALSE;
+#endif
 BOOL decorated_mode = TRUE;
 UINT64 thunk_lock_callback = 0;
 
@@ -2169,12 +2175,20 @@ static DEVMODEW *get_virtual_modes( const DEVMODEW *initial, const DEVMODEW *max
     SIZE *screen_sizes;
     BOOL vertical;
 #ifdef __SWITCH__
-    DEVMODEW scaled_maximum = *maximum;
+    DEVMODEW scaled_maximum = *maximum, scaled_initial = *initial;
 
-    /* Presentation scales virtual modes to the unchanged physical output. */
-    scaled_maximum.dmPelsWidth = max( scaled_maximum.dmPelsWidth, 1920 );
-    scaled_maximum.dmPelsHeight = max( scaled_maximum.dmPelsHeight, 1080 );
+    /* Horizon's game display is 1280x720. Do not advertise synthetic Full HD
+     * modes merely because Wine can scale them: engines choose the largest
+     * advertised mode and allocate/render beyond the intended device budget. */
+    scaled_maximum.dmPelsWidth = min( scaled_maximum.dmPelsWidth, 1280 );
+    scaled_maximum.dmPelsHeight = min( scaled_maximum.dmPelsHeight, 720 );
     maximum = &scaled_maximum;
+    if (scaled_initial.dmPelsWidth > maximum->dmPelsWidth || scaled_initial.dmPelsHeight > maximum->dmPelsHeight)
+    {
+        scaled_initial.dmPelsWidth = maximum->dmPelsWidth;
+        scaled_initial.dmPelsHeight = maximum->dmPelsHeight;
+        initial = &scaled_initial;
+    }
 #endif
 
     /* Check the ratio of dmPelsWidth to dmPelsHeight to determine whether the initial display mode
@@ -2269,6 +2283,11 @@ static void add_modes( const DEVMODEW *current, UINT host_modes_count, const DEV
     {
         if (!read_source_mode( source->key, ENUM_CURRENT_SETTINGS, &virtual ) || is_detached_mode( &virtual ))
             virtual = physical;
+#ifdef __SWITCH__
+        /* Recover an old persisted virtual mode from before the Horizon cap. */
+        if (virtual.dmPelsWidth > physical.dmPelsWidth || virtual.dmPelsHeight > physical.dmPelsHeight)
+            virtual = physical;
+#endif
 
         if ((virtual_modes = get_virtual_modes( current, &physical, host_modes, host_modes_count, &virtual_count )))
         {
@@ -2280,7 +2299,11 @@ static void add_modes( const DEVMODEW *current, UINT host_modes_count, const DEV
         }
     }
 
-    if (current == &detached || !read_source_mode( source->key, ENUM_REGISTRY_SETTINGS, &dummy ))
+    if (current == &detached || !read_source_mode( source->key, ENUM_REGISTRY_SETTINGS, &dummy )
+#ifdef __SWITCH__
+        || dummy.dmPelsWidth > physical.dmPelsWidth || dummy.dmPelsHeight > physical.dmPelsHeight
+#endif
+       )
         write_source_mode( source->key, ENUM_REGISTRY_SETTINGS, current );
     write_source_mode( source->key, ENUM_CURRENT_SETTINGS, current );
 

@@ -19,6 +19,8 @@ void launcher_dlls_open( struct launcher_dlls *dlls );
 int  launcher_dlls_ready( struct launcher_dlls *dlls );
 /* Whether the card can start a program, without asking anything. */
 int  launcher_dlls_is_ready( struct launcher_dlls *dlls );
+/* Whether its worker is on the card or the network right now. */
+int launcher_dlls_busy( struct launcher_dlls *d );
 /* Download what is new or changed, after asking; for quick setup. */
 int  launcher_dlls_install( struct launcher_dlls *dlls );
 /* A sentence on what the card has and what downloading would take. */

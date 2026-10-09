@@ -506,6 +506,8 @@ static void test_explicit_loader(void)
     static const char ini[] = "[Atmosphere]\n"
         "pkg3=atmosphere/package3\n"
         "kip1=atmosphere/kips/loader.kip\n"
+        "kip1=atmosphere/kips/hoc.kip\n"
+        "kip1=atmosphere/kips/autorun-loader.kip\n"
         "emummc_force_disable=1\n"
         "memmode=1\n"
         "icon=bootloader/res/emummc.bmp\n\n";
@@ -522,6 +524,9 @@ static void test_explicit_loader(void)
                          "kernel=" MESOSPHERE "\nemummc_force_disable=1\n"));
     assert(strstr(entry, "memmode=1\nicon=bootloader/res/emummc.bmp\n"));
     assert(!strstr(entry, "kip1=atmosphere/kips/loader.kip"));
+    assert(!strstr(entry, "kip1=atmosphere/kips/hoc.kip"));
+    assert(!strstr(entry, "kip1=" STOCK_KIP "\n") ||
+           !strstr(strstr(entry, "kip1=" STOCK_KIP "\n") + 1, "kip1=" STOCK_KIP "\n"));
     free(result.data);
     remove_fixture(f.root);
 }

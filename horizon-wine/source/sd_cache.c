@@ -77,10 +77,91 @@ struct sd_cache_fill_ctx
     void *fd;
 };
 
+/* The file system service can close its end of the application's session. From
+ * then on every file, folder and free-space request fails (kernel result
+ * 2001-0123), and the application sees no card at all: no games, no DLLs, no
+ * settings, until it is started again. Seen seconds after the shell starts,
+ * a few times a day; what makes the service do it is not known.
+ *
+ * Instead of living without a card, the session is made anew and the card
+ * mounted again; the files open at that moment are opened again at their
+ * positions, what was remembered of the card is forgotten (the failures were
+ * being remembered as "no such file"), and the request that met the closed
+ * session is made once more. The log says when it happened and during what,
+ * which is the first record of it there can be: before, the log went with
+ * the card. */
+#define SD_SESSION_CLOSED 0xf601u
+unsigned int wine_nx_sd_reconnects;
+
+int wine_nx_sd_cache_install(void);
+
+static int sd_cache_reconnect( struct _reent *r, const char *doing, const char *path )
+{
+    struct sd_cache_file *file;
+    unsigned int reopened = 0, lost = 0, exits = 0, i;
+    struct stat st;
+    char line[400];
+    Result rc;
+
+    if (r->_errno != EIO || fsdevGetLastResult() != SD_SESSION_CLOSED || !sd_cache_base) return 0;
+    pthread_mutex_lock( &sd_cache_mutex );
+    /* Another thread may have brought it back while this one waited. */
+    if (!sd_cache_base->stat_r( r, "sdmc:/", &st ))
+    {
+        pthread_mutex_unlock( &sd_cache_mutex );
+        return 1;
+    }
+    /* Where each open file stands is kept by libnx, with no request made. */
+    for (file = sd_cache_files; file; file = file->next)
+        file->reopen_at = sd_cache_base->seek_r ? (long long)sd_cache_base->seek_r( r, file->key, 0, SEEK_CUR ) : 0;
+
+    fsdevUnmountDevice( "sdmc" );
+    while (serviceIsActive( fsGetServiceSession() ) && exits < 8)
+    {
+        fsExit();
+        exits++;
+    }
+    rc = fsInitialize();
+    for (i = 1; R_SUCCEEDED( rc ) && i < exits; i++) fsInitialize();
+    if (R_SUCCEEDED( rc )) rc = fsdevMountSdmc();
+    sd_cache_base = NULL;
+    if (R_FAILED( rc ) || !wine_nx_sd_cache_install())
+    {
+        pthread_mutex_unlock( &sd_cache_mutex );
+        snprintf( line, sizeof(line), "[CARD] the file system service closed the session during %s of %s; "
+                  "a new one could not be made (%#x)", doing, path ? path : "an open file", rc );
+        wine_nx_runtime_trace( line );
+        r->_errno = EIO;
+        return 0;
+    }
+    for (file = sd_cache_files; file; file = file->next)
+    {
+        int flags = (file->writable ? O_RDWR : O_RDONLY) | (file->append ? O_APPEND : 0);
+
+        sd_cache_drop( file, &sd_cache_pool );
+        if (sd_cache_base->open_r( r, file->key, file->path, flags, 0 ) == -1) lost++;
+        else
+        {
+            if (file->reopen_at > 0 && sd_cache_base->seek_r) sd_cache_base->seek_r( r, file->key, file->reopen_at, SEEK_SET );
+            reopened++;
+        }
+    }
+    sd_stat_changed( NULL );
+    wine_nx_sd_reconnects++;
+    pthread_mutex_unlock( &sd_cache_mutex );
+    snprintf( line, sizeof(line), "[CARD] the file system service closed the session during %s of %s; a new session was "
+              "made and the card mounted again (time %u): %u open files opened again, %u could not be",
+              doing, path ? path : "an open file", wine_nx_sd_reconnects, reopened, lost );
+    wine_nx_runtime_trace( line );
+    return 1;
+}
+
 static ssize_t sd_cache_base_read( struct _reent *r, void *fd, char *ptr, size_t len )
 {
     u64 start = armGetSystemTick();
     ssize_t ret = sd_cache_base->read_r( r, fd, ptr, len );
+
+    if (ret < 0 && sd_cache_reconnect( r, "a read", NULL )) ret = sd_cache_base->read_r( r, fd, ptr, len );
 
     if (ret < 0 && r->_errno == EIO && sd_cache_base->seek_r && sd_cache_base->fstat_r)
     {
@@ -190,6 +271,8 @@ static ssize_t sd_cache_base_write( struct _reent *r, void *fd, const char *ptr,
 {
     u64 start = armGetSystemTick();
     ssize_t ret = sd_cache_base->write_r( r, fd, ptr, len );
+
+    if (ret < 0 && sd_cache_reconnect( r, "a write", NULL )) ret = sd_cache_base->write_r( r, fd, ptr, len );
 
     __atomic_add_fetch( &wine_nx_sd_writes, 1, __ATOMIC_RELAXED );
     __atomic_add_fetch( &wine_nx_sd_write_ns, armTicksToNs( armGetSystemTick() - start ), __ATOMIC_RELAXED );
@@ -321,7 +404,9 @@ static int sd_cache_open( struct _reent *r, void *fd, const char *path, int flag
 
     /* The open may be of a file with bytes held, or may truncate one. */
     sd_cache_flush_path( r, path );
-    if (sd_cache_base->open_r( r, fd, path, flags, mode ) == -1) return -1;
+    if (sd_cache_base->open_r( r, fd, path, flags, mode ) == -1 &&
+        (!sd_cache_reconnect( r, "the opening", path ) || sd_cache_base->open_r( r, fd, path, flags, mode ) == -1))
+        return -1;
     pthread_mutex_lock( &sd_cache_mutex );
     if ((file = sd_cache_opened( &sd_cache_files, &sd_cache_pool, fd, path, writable )))
     {
@@ -558,12 +643,19 @@ static off_t sd_cache_seek( struct _reent *r, void *fd, off_t pos, int dir )
         }
     }
     pthread_mutex_unlock( &sd_cache_mutex );
-    return sd_cache_base->seek_r( r, fd, pos, dir );
+    {
+        /* From the end of the file the card is asked how long it is. */
+        off_t ret = sd_cache_base->seek_r( r, fd, pos, dir );
+
+        if (ret == -1 && sd_cache_reconnect( r, "a measure", NULL )) ret = sd_cache_base->seek_r( r, fd, pos, dir );
+        return ret;
+    }
 }
 
 static int sd_cache_fstat( struct _reent *r, void *fd, struct stat *st )
 {
-    if (sd_cache_base->fstat_r( r, fd, st ) == -1) return -1;
+    if (sd_cache_base->fstat_r( r, fd, st ) == -1 &&
+        (!sd_cache_reconnect( r, "a measure", NULL ) || sd_cache_base->fstat_r( r, fd, st ) == -1)) return -1;
     if (!__atomic_load_n( &sd_write_buffers, __ATOMIC_RELAXED )) return 0;
     pthread_mutex_lock( &sd_cache_mutex );
     sd_cache_held_size( st, sd_write_find( sd_write_buffers, fd ) );
@@ -609,6 +701,7 @@ static void sd_cache_count_stat( const char *path )
 static int sd_cache_stat_path( struct _reent *r, const char *path, struct stat *st,
                                int (*base)( struct _reent *, const char *, struct stat * ) )
 {
+    int (*stat_before)( struct _reent *, const char *, struct stat * ) = sd_cache_base->stat_r;
     unsigned int generation;
     int error, ret;
 
@@ -630,6 +723,9 @@ static int sd_cache_stat_path( struct _reent *r, const char *path, struct stat *
 
     sd_cache_count_stat( path );
     ret = base( r, path, st );
+    /* The base is asked by name again: mounting anew gives the device anew. */
+    if (ret && sd_cache_reconnect( r, "a look", path ))
+        ret = (base == stat_before ? sd_cache_base->stat_r : sd_cache_base->lstat_r)( r, path, st );
     pthread_mutex_lock( &sd_cache_mutex );
     /* Not if the card changed while it was asked. */
     if (generation == sd_stat_generation) sd_stat_store( &sd_stat_cache, path, st, ret ? r->_errno : 0 );
@@ -653,6 +749,8 @@ static int sd_cache_mkdir( struct _reent *r, const char *path, int mode )
 {
     int ret = sd_cache_base->mkdir_r( r, path, mode );
 
+    if (ret && sd_cache_reconnect( r, "the making", path )) ret = sd_cache_base->mkdir_r( r, path, mode );
+
     pthread_mutex_lock( &sd_cache_mutex );
     sd_stat_changed( path );
     pthread_mutex_unlock( &sd_cache_mutex );
@@ -669,10 +767,86 @@ static int sd_cache_rmdir( struct _reent *r, const char *path )
     return ret;
 }
 
+/* A folder being listed when the session closes is opened again and read on
+ * from the entry it had reached: a listing that simply ended there is a
+ * library with games missing. */
+#define SD_LISTINGS 24
+static struct sd_listing
+{
+    DIR_ITER *dir;
+    unsigned int read;      /* entries handed out so far */
+    char path[512];
+} sd_listings[SD_LISTINGS];   /* under sd_cache_mutex */
+
+static struct sd_listing *sd_listing_of( DIR_ITER *dir )
+{
+    unsigned int i;
+
+    for (i = 0; i < SD_LISTINGS; i++) if (sd_listings[i].dir == dir) return &sd_listings[i];
+    return NULL;
+}
+
+static int sd_cache_dirnext( struct _reent *r, DIR_ITER *dir, char *name, struct stat *st )
+{
+    int ret = sd_cache_base->dirnext_r( r, dir, name, st );
+    struct sd_listing *listing;
+    char path[512] = "";
+    unsigned int read = 0, i;
+
+    if (ret && sd_cache_reconnect( r, "the listing", NULL ))
+    {
+        pthread_mutex_lock( &sd_cache_mutex );
+        if ((listing = sd_listing_of( dir )))
+        {
+            read = listing->read;
+            snprintf( path, sizeof(path), "%s", listing->path );
+        }
+        pthread_mutex_unlock( &sd_cache_mutex );
+        /* The same order, as nothing changed in the folder meanwhile. */
+        if (path[0] && sd_cache_base->diropen_r( r, dir, path ))
+        {
+            for (i = 0, ret = 0; !ret && i <= read; i++) ret = sd_cache_base->dirnext_r( r, dir, name, st );
+        }
+    }
+    if (!ret)
+    {
+        pthread_mutex_lock( &sd_cache_mutex );
+        if ((listing = sd_listing_of( dir ))) listing->read++;
+        pthread_mutex_unlock( &sd_cache_mutex );
+    }
+    return ret;
+}
+
+static int sd_cache_dirclose( struct _reent *r, DIR_ITER *dir )
+{
+    struct sd_listing *listing;
+
+    pthread_mutex_lock( &sd_cache_mutex );
+    if ((listing = sd_listing_of( dir ))) listing->dir = NULL;
+    pthread_mutex_unlock( &sd_cache_mutex );
+    return sd_cache_base->dirclose_r( r, dir );
+}
+
 static DIR_ITER *sd_cache_diropen( struct _reent *r, DIR_ITER *dir, const char *path )
 {
+    struct sd_listing *listing;
+    DIR_ITER *ret;
+
     sd_cache_flush_all( r );
-    return sd_cache_base->diropen_r( r, dir, path );
+    ret = sd_cache_base->diropen_r( r, dir, path );
+    if (!ret && sd_cache_reconnect( r, "the listing", path )) ret = sd_cache_base->diropen_r( r, dir, path );
+    if (ret && strlen( path ) < sizeof(sd_listings[0].path))
+    {
+        pthread_mutex_lock( &sd_cache_mutex );
+        if ((listing = sd_listing_of( ret )) || (listing = sd_listing_of( NULL )))
+        {
+            listing->dir = ret;
+            listing->read = 0;
+            strcpy( listing->path, path );
+        }
+        pthread_mutex_unlock( &sd_cache_mutex );
+    }
+    return ret;
 }
 
 static int sd_cache_rename( struct _reent *r, const char *old_name, const char *new_name )
@@ -686,6 +860,7 @@ static int sd_cache_rename( struct _reent *r, const char *old_name, const char *
     sd_cache_forget_path( sd_cache_files, &sd_cache_pool, new_name );
     pthread_mutex_unlock( &sd_cache_mutex );
     ret = sd_cache_base->rename_r( r, old_name, new_name );
+    if (ret && sd_cache_reconnect( r, "the renaming", old_name )) ret = sd_cache_base->rename_r( r, old_name, new_name );
     /* Everything under a directory renamed moves with it. */
     pthread_mutex_lock( &sd_cache_mutex );
     sd_stat_changed( NULL );
@@ -702,6 +877,7 @@ static int sd_cache_unlink( struct _reent *r, const char *name )
     sd_cache_forget_path( sd_cache_files, &sd_cache_pool, name );
     pthread_mutex_unlock( &sd_cache_mutex );
     ret = sd_cache_base->unlink_r( r, name );
+    if (ret && sd_cache_reconnect( r, "the removal", name )) ret = sd_cache_base->unlink_r( r, name );
     pthread_mutex_lock( &sd_cache_mutex );
     sd_stat_changed( name );
     pthread_mutex_unlock( &sd_cache_mutex );
@@ -730,6 +906,20 @@ int wine_nx_sd_cache_install(void)
 {
     int device = FindDevice( "sdmc:" );
 
+    static int recursive;
+
+    /* Making the session anew (sd_cache_reconnect) is entered from every
+     * depth of this file, with the lock held or not. */
+    if (!recursive)
+    {
+        pthread_mutexattr_t attr;
+
+        pthread_mutexattr_init( &attr );
+        pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE );
+        pthread_mutex_init( &sd_cache_mutex, &attr );
+        pthread_mutexattr_destroy( &attr );
+        recursive = 1;
+    }
     if (device < 0 || !devoptab_list[device] || sd_cache_base) return 0;
     sd_cache_base = devoptab_list[device];
     sd_cache_device = *sd_cache_base;
@@ -747,6 +937,11 @@ int wine_nx_sd_cache_install(void)
         if (sd_cache_base->lstat_r) sd_cache_device.lstat_r = sd_cache_lstat;
         if (sd_cache_base->fsync_r) sd_cache_device.fsync_r = sd_cache_fsync;
         if (sd_cache_base->diropen_r) sd_cache_device.diropen_r = sd_cache_diropen;
+        if (sd_cache_base->diropen_r && sd_cache_base->dirnext_r && sd_cache_base->dirclose_r)
+        {
+            sd_cache_device.dirnext_r = sd_cache_dirnext;
+            sd_cache_device.dirclose_r = sd_cache_dirclose;
+        }
         /* A stat kept is only right while every change on the card is seen. */
         if (sd_cache_base->mkdir_r) sd_cache_device.mkdir_r = sd_cache_mkdir;
         if (sd_cache_base->rmdir_r) sd_cache_device.rmdir_r = sd_cache_rmdir;

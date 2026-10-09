@@ -303,6 +303,8 @@ static unsigned int horizon_registry_init(void)
             "[System\\\\CurrentControlSet\\\\Services\\\\Tcpip\\\\Parameters]\n"
             "\"Hostname\"=\"wine-nx\"\n"
             "\"Domain\"=\"\"\n"
+            "[Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\ProfileList]\n"
+            "\"ProfilesDirectory\"=\"C:\\\\users\"\n"
             "[Software\\\\Classes\\\\CLSID\\\\{BCDE0395-E52F-467C-8E3D-C4579291692E}\\\\InprocServer32]\n"
             "@=\"mmdevapi.dll\"\n"
             "\"ThreadingModel\"=\"Both\"\n"
@@ -353,9 +355,20 @@ static int horizon_server_handle_registry_user( struct horizon_server_connection
     static const struct { unsigned char revision, count, authority[6]; unsigned int sub[5]; } sid =
         {1, 5, {0,0,0,0,0,5}, {21,0,0,0,1000}};
     if (req->handle != 0xfffffffau && req->handle != 0xfffffffcu)
-        reply.header.error = HORIZON_STATUS_INVALID_HANDLE;
-    else if (req->which_sid != 1) reply.header.error = HORIZON_STATUS_NOT_IMPLEMENTED;
-    else
+    {
+        struct horizon_server_handle_entry *entry;
+        pthread_mutex_lock( &horizon_server_objects_mutex );
+        entry = horizon_server_find_handle_locked( req->handle );
+        if (!entry) reply.header.error = HORIZON_STATUS_INVALID_HANDLE;
+        else if (entry->object->type != HORIZON_SERVER_OBJECT_TOKEN)
+            reply.header.error = 0xc0000024u; /* STATUS_OBJECT_TYPE_MISMATCH */
+        else if (!(entry->access & 0x0008u))
+            reply.header.error = 0xc0000022u; /* STATUS_ACCESS_DENIED / TOKEN_QUERY */
+        pthread_mutex_unlock( &horizon_server_objects_mutex );
+    }
+    if (!reply.header.error && req->which_sid != 1)
+        reply.header.error = HORIZON_STATUS_NOT_IMPLEMENTED;
+    if (!reply.header.error)
     {
         reply.sid_len = sizeof(sid);
         if (req->header.reply_size < sizeof(sid)) reply.header.error = HORIZON_STATUS_BUFFER_TOO_SMALL;

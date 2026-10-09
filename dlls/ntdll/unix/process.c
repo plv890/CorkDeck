@@ -772,6 +772,30 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
         }
         goto done;
     }
+#ifdef __SWITCH__
+    {
+        /* One process on this system: the runtime remembers what was asked for. */
+        extern int wine_nx_note_child_program( const char *, const WCHAR *, unsigned int ) __attribute__((weak));
+
+        /* Taken as the program to run next: the caller gets two real objects,
+         * already signalled, for a program that as far as waiting goes is over.
+         * They are not a process and a thread, and say so when asked for more. */
+        if (&wine_nx_note_child_program &&
+            wine_nx_note_child_program( unix_name, params->CommandLine.Buffer,
+                                        params->CommandLine.Length / sizeof(WCHAR) ) &&
+            !NtCreateEvent( &process_handle, EVENT_ALL_ACCESS, NULL, NotificationEvent, TRUE ))
+        {
+            if (!NtCreateEvent( &thread_handle, EVENT_ALL_ACCESS, NULL, NotificationEvent, TRUE ))
+            {
+                process_id = thread_id = 0;
+                memset( info, 0, sizeof(*info) );
+                goto output;
+            }
+            NtClose( process_handle );
+            process_handle = 0;
+        }
+    }
+#endif
     if (!machine)
     {
         machine = pe_info.machine;
@@ -913,6 +937,9 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
 
     /* update output attributes */
 
+#ifdef __SWITCH__
+output:
+#endif
     for (i = 0; i < attr_count; i++)
     {
         switch (ps_attr->Attributes[i].Attribute)

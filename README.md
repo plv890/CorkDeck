@@ -1,215 +1,134 @@
-<p align="center">
-  <img src="documentation/logo-image.png" alt="Autorun logo" width="220">
-</p>
+# CorkDeck
 
-<h1 align="center">Autorun</h1>
+**Play Windows PC games and your Steam library on a Nintendo Switch.**
 
-<p align="center">
-  Play Windows PC games on your Nintendo Switch.<br>
-  <sub>Previously called Wine-NX.</sub>
-</p>
+[Русский](README.ru.md) · [Download](https://github.com/plv890/CorkDeck/releases/latest) · [Installation](docs/INSTALL.md) · [Compatibility](docs/COMPATIBILITY.md) · [Credits](CREDITS.md)
 
-Autorun is a homebrew app that runs Windows games and programs on the Switch.
-It brings [Wine](https://www.winehq.org) - the layer that lets Windows software
-run outside Windows - to the Switch's own operating system, and translates PC
-code for the Switch's ARM processor. You bring the games: copy your own PC
-copies to the SD card and start them from Autorun's library.
+![CorkDeck game library on a Nintendo Switch, with Steam games installed](docs/screenshots/library.jpg)
 
-- **32-bit and 64-bit games.** [FEX](https://github.com/FEX-Emu/FEX) translates
-  both x86 and x64 code; [Box64](https://github.com/ptitSeb/box64) is there as a
-  second translator for 32-bit programs.
-- **The Switch's GPU.** OpenGL and Vulkan come from Mesa 26
-  ([mesa-switch](https://github.com/danfromtico/mesa-switch)), and Direct3D 8
-  to 11 run through [DXVK](https://github.com/doitsujin/dxvk), Direct3D 12
-  through [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton).
-- **Frame generation** with [LSFG-VK](https://git.lsfg-vk.dev/lsfg-vk-archive.git),
-  for Vulkan games, with your own copy of Lossless Scaling.
-- **The Windows DLLs games need** are downloaded and kept up to date by the app.
-- **USB drives** show up in games as drives D: to H:.
-- **A launcher** with artwork, per-game settings, controls and HOME menu
-  shortcuts for games.
+CorkDeck is a homebrew application that runs Windows games and programs on the Nintendo Switch, directly under the console's own Horizon OS. It puts a controller-friendly game library, Steam sign-in and downloads, per-game settings and launch diagnostics into one interface, in the spirit of the Steam Deck's game mode.
 
-> **Autorun is experimental.** Some games run well, many start and then stop on
-> something that isn't done yet. Every run writes a log that says where. A game
-> compatibility list is coming.
+Under the interface are [Wine](https://www.winehq.org), the [FEX](https://github.com/FEX-Emu/FEX) and [Box64](https://github.com/ptitSeb/box64) x86 translators, and the Mesa, [DXVK](https://github.com/doitsujin/dxvk) and [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) graphics stack.
 
-![The Autorun launcher](documentation/launcher.jpg)
+> **CorkDeck is a fork of [Autorun](https://github.com/autorunhq/autorun) (formerly Wine-NX).**
+> Everything that makes Windows software run on the Switch at all comes from that project, its author and its contributors. CorkDeck builds a different shell and a Steam workflow on top of their work. Thank you.
 
-## What you need
+CorkDeck is experimental. Some games run, many do not yet, and performance depends heavily on the game. Please read [what has actually been checked](docs/COMPATIBILITY.md) before you expect a particular title to work.
 
-- A Nintendo Switch with custom firmware (Atmosphère) that can run homebrew.
-- A microSD card with room for Autorun, its Windows DLLs (about 200 MB to
-  download) and your games.
-- Your games, as installed PC folders.
+## Screenshots
 
-## Installing
+Unedited captures from a Nintendo Switch running CorkDeck 0.2. The interface comes in English and Russian.
 
-1. Download the latest `autorun-NNN.zip` from
-   [Releases](https://github.com/autorunhq/autorun/releases/latest).
-2. Unzip it to the **root** of your SD card. Everything goes into
-   `switch/wine`.
-3. Start **Autorun** from the Homebrew Menu. **Quick setup** runs the first
-   time:
-   - puts Autorun on the HOME menu, so games get the console's full memory;
-   - downloads the Windows DLLs from
-     [autorun-horizon-dlls](https://github.com/autorunhq/autorun-horizon-dlls);
-   - installs the boot changes some games need: a Mesosphere build that lets a
-     game run at low memory addresses, with the stock loader or
-     [Horizon-OC](https://github.com/Horizon-OC/Horizon-OC)'s for overclocking.
+| | |
+| --- | --- |
+| ![Game page showing dependencies, translator, renderer and the last session](docs/screenshots/game-page.jpg) | ![Per-game settings with the purpose and possible effect of the selected option](docs/screenshots/per-game-settings.jpg) |
+| Game page: what the game will run with, and how its last session ended | Per-game settings: every option says what it is for and what it may affect |
 
-   **Settings -> System -> Quick setup** runs it again.
+![Fallout 3 (Steam version) at its main menu on a Nintendo Switch, started from CorkDeck 0.2](docs/screenshots/fallout3-on-switch.jpg)
 
-Without a network, download that repository (Code, Download ZIP) and unzip its
-`switch` folder to the root of the SD card too.
+Fallout 3 (Steam version) at its main menu on a Nintendo Switch, started from CorkDeck 0.2.
 
-### Updating
+## Download and install
 
-**Settings -> System -> Check for update** installs a newer release; your
-games, settings and artwork stay. **Settings -> System -> Windows DLLs**
-downloads only the DLLs that changed, and **Verify files** checks the card's
-copies.
+1. Download **`CorkDeck-0.2.zip`** from [Releases](https://github.com/plv890/CorkDeck/releases/latest). The "Source code" archives on that page are for developers; the installable package is the ZIP named CorkDeck.
+2. Extract it and copy the `switch` folder to the root of the SD card.
+3. Open the Homebrew Menu over a game (hold **R** while starting one), start `wine-nx-runtime` and follow First set-up. It adds a CorkDeck entry to the HOME menu and downloads the Windows components.
 
-## Adding games
+The full guide, including moving over from Autorun and updating from an earlier CorkDeck, is in [docs/INSTALL.md](docs/INSTALL.md).
 
-1. Copy the game's folder into `switch/wine/drive_c` on the SD card (that
-   folder is the game's `C:` drive), or onto a USB drive.
-2. In Autorun, press **+** -> **Add game** and choose the game's `.exe`.
-3. Press **A** to play.
+### What you need
 
-Adding a game gives it DXVK, which draws Direct3D through the Switch's Vulkan
-driver. To keep new games on Wine's own Direct3D, turn off **Settings -> Give a
-new game DXVK**.
+- A Nintendo Switch that can run homebrew, with Atmosphère. Use emuMMC only.
+- An SD card: about 60 MB for CorkDeck, about 1 GB for the Windows components it downloads, plus room for games.
+- Wi-Fi for the first set-up and for Steam.
+- Your own games. None are included.
+- Optional: [Horizon OC](https://github.com/Horizon-OC/Horizon-OC) for per-game clock profiles.
 
-Before the first program on a card, Autorun sets up the Windows components a
-PC's Windows installation would have registered, such as DirectShow and the MP3
-decoder that game movies and music play through. It runs by itself, once.
+## What it does
 
-## Using the launcher
+- **Library.** Add any Windows `.exe` from the SD card, or install games from your Steam account.
+- **Steam on the Switch.** Sign in with a QR code or password, browse the games you own, download and install them on the console.
+- **Per-game settings** for the translator, the renderer, threads and memory.
+- **Per-game clock profiles** through Horizon OC.
+- **Diagnostics.** An FPS and frame-time display, and a report for every launch.
 
-| Button | What it does |
-|---|---|
-| **A** | Play the selected game |
-| **Y** | The game's options |
-| **L / R** | Switch between Home (recently played) and the Library |
-| **−** | Settings (on Home), filter and sort (in the Library) |
-| **+** | Add a game, run a program once without adding it (a setup, a patch), or exit Autorun |
+## What CorkDeck adds to Autorun
 
-The touchscreen works everywhere too.
+CorkDeck keeps Autorun's runtime, the part that actually executes Windows code, and rebuilds the application around it.
 
-**A game's options (Y)**:
-- mark it as a favorite or hide it, change its title, give it command-line
-  arguments, and download its artwork;
-- make a HOME menu shortcut that starts it directly;
-- pick how its graphics are drawn (Wine's Direct3D or DXVK), how a picture
-  smaller than the screen is enlarged (FSR 1.0, or whole-pixel steps for pixel
-  art), and **Frame Generation**;
-- pick the CPU translator (FEX or Box64), and give it its own controls.
+**Interface**
 
-**Settings (−)**: show hidden games, the controls every game uses by default,
-a [SteamGridDB](https://www.steamgriddb.com) API key for artwork, returning to
-Autorun when a game ends, updates, the Windows DLLs, and the credits.
+- A new shell with a home screen (recent games, and a "needs attention" list that names what is wrong), a library and a page for every game.
+- Library tabs for all, favourite, installed, not installed and local programs, your own categories, sorting, a grid or a list, and search.
+- A game page that shows before you press Play which Windows components, DXVK version, translator and renderer will be used, how long you have played, and how the last session ended. A game with several executables lets you pick which one starts.
+- Settings where **every option explains its purpose and its possible effect**, and shows where the current value comes from: the default, the global settings or the game's own profile. One button resets it.
+- The main menu on **−** and a status panel on **+** from any screen; notifications in a corner instead of blocking windows.
+- A launch screen with the game's artwork that stays until the game draws its first frame, and windows of launchers and configuration tools that remain visible before rendering starts.
+- English and Russian interface, with a new typeface (Manrope).
+- After a game exits, you are back in the shell.
 
-### Frame generation
+**Steam**
 
-LSFG-VK doubles the frame rate of Vulkan games (DXVK and VKD3D-Proton count) by
-drawing a frame between each two the game draws. It needs Lossless Scaling's
-`Lossless.dll`, which Autorun does not include: copy it from your own
-installation to `switch/wine/lsfg/Lossless.dll`, then turn on **LSFG-VK (2x)** in
-the game's **Frame Generation** options.
+- Sign-in inside the shell, by QR code or password, with the session kept between starts.
+- The games of your account in a "Not installed" tab, with covers fetched from Steam.
+- A downloads screen with progress, speed over the last two minutes and time left.
+- Downloads that resume after an interruption. When one cannot continue, CorkDeck offers to start it over, cancel it or try again, and logs why it failed.
+- English files are installed when a game has none in the system language.
+- Steam install scripts are applied (registry entries and folder copies), which games such as Fallout 3 need in order to start at all.
+- Games built on Steamworks.NET no longer close right after starting.
 
-## Playing
+**Running games**
 
-Out of the box the controller works as a mouse and keyboard:
+- Pressing Play downloads missing Windows components by itself.
+- Per-game clock profiles through Horizon OC (economy, balanced, performance, extreme), never above what Horizon OC allows, and restored afterwards. Voltages are not touched.
+- A global switch for the FPS and frame-time display.
+- If the system closes the application's access to the SD card, CorkDeck reconnects without a restart.
 
-| Control | Sends |
-|---|---|
-| Right stick, or a finger on the screen | Moves the mouse pointer |
-| **A** / **B** | Left / right mouse button |
-| D-pad, left stick | Arrow keys |
-| **+** | Esc |
-| **X**, **Y** | Space, F |
-| **L**, **R** | Tab, Shift |
+**Diagnostics**
 
-Every button can be changed: **Settings -> Game defaults -> Controls** for all
-games, or a game's options (**Y**) -> **Controls** for that game alone. Each
-stick, the d-pad and the touchscreen can move the mouse or send the arrow keys
-or W A S D. Games with controller support see an Xbox 360 controller, through
-XInput or DirectInput.
+- Every launch gets its own report folder: the game's log, the settings that were applied, the modules that were loaded, and how and when it ended.
+- A session history per game, with duration and exit code.
+- The logs of the two previous starts are kept.
 
-**Hold + and − together for a second** to close a game.
+**Removed:** the application no longer updates itself over the network. A new version is installed by replacing one file.
 
-**Minus + right stick click** opens the on-screen keyboard over the game (it
-also opens by itself when a text field is selected; **Settings -> On-screen
-keyboard** turns that off). It types like a real keyboard, one key at a time:
+CorkDeck is not a drop-in replacement: both projects use the `switch/wine` folder, so install one or the other. See [FORK.md](FORK.md) for the fork point and [docs/RELEASE-0.2.md](docs/RELEASE-0.2.md) for this version's changes.
 
-| On the keyboard | Does |
-|---|---|
-| D-pad, left stick | Move between keys |
-| **A**, or tap a key | Press it |
-| **B** | Backspace |
-| **Y** / **X** | Space / Shift for the next key |
-| **L**, **R** | Cursor left, right |
-| **+** | Enter |
-| **ZL**, **ZR** | Keyboard to the top, back to the bottom |
-| **−** | Close it |
+If something is broken in CorkDeck, please report it [here](https://github.com/plv890/CorkDeck/issues) and not to the Autorun project. They did not write the parts CorkDeck changed.
 
-While it is open, the game gets no controller input.
+## Questions people ask
 
-## If something goes wrong
+**Is this SteamOS or Linux on the Switch?**
+No. CorkDeck does not install another operating system and does not need Linux or Android on the console. It is a homebrew application for the Switch's own system software. The interface borrows the idea of the Steam Deck's game mode, and the resemblance ends there.
 
-Every run leaves its logs in `switch/wine/logs` on the SD card:
+**Is this the real Steam client?**
+No. CorkDeck has its own small Steam client that signs in to your account, lists the games you own and downloads them. Friends, achievements, Steam Cloud, the overlay and online multiplayer are not provided.
 
-- `autorun_runtime.log` - the last run, whatever it was.
-- `NAME.log` - the last run of that game, kept per game. A run with verbose
-  traces or the profiler on gets its own file, such as `NAME_verbose.log`, so it
-  doesn't replace the plain one.
-- `stdout.txt`, `stderr.txt` and `stdin.txt` - the program's standard output,
-  error and input.
+**Which games work?**
+There is no compatibility list yet, only a short set of [recorded results](docs/COMPATIBILITY.md). Older Direct3D 9 to 11 games are the realistic target. The Switch has a 2015 mobile chip and runs x86 code through a translator, so set expectations accordingly.
 
-When reporting a problem in
-[Issues](https://github.com/autorunhq/autorun/issues), include the game's log
-and say what you saw. **Verbose traces** in the game's options gives more
-detail, at some speed cost.
+**Does it work on every Switch?**
+It has been developed and tested on one console. Reports from other models are welcome.
 
-## Limits
+**Is it safe for my console?**
+CorkDeck runs under custom firmware, which Nintendo does not permit. Keep it on emuMMC. First set-up can install boot patches that some games need; back up the `atmosphere` and `bootloader` folders before that step, or skip it.
 
-- Speed: demanding 3D games are limited by translating the game's code on the
-  fly, more than by the graphics chip.
-- Memory: games share the Switch's 4 GB with the system; big games can run out.
-- One game at a time, one controller.
-- A game may need Windows files the card doesn't have yet; the log names them.
+## Authorship and use of AI
 
-## For developers
+CorkDeck is made by **Maj0ra'sMask** ([@plv890](https://github.com/plv890) on GitHub), who is responsible for its concept, product decisions, systems engineering and testing on hardware.
 
-```sh
-sh build.sh
-```
+**The fork's code and documentation were written mainly by AI coding agents** (OpenAI Codex / GPT and Anthropic Claude) working under that direction, and checked by automated host tests and by runs on a real console. This is stated plainly so that anyone reading or reusing the code knows how it was produced. It applies to CorkDeck's own changes only; Autorun, Wine and every other component keep their own authors and credit.
 
-builds Autorun in the [switch-dev](https://github.com/autorunhq/switch-dev)
-Docker image and writes the SD card archive to
-`horizon-wine/build-autorun/autorun-NNN.zip`. It needs Docker, git, Python 3
-and, on a Mac, Homebrew's bison. `sh build.sh --help` lists the options. How
-Autorun works, its tests and its file layout are in
-[documentation/technical.md](documentation/technical.md).
+## Building from source
 
-## Credits
+See [BUILDING.md](BUILDING.md). The inputs of the 0.2 package that are not part of the main tree, such as the sources of the local Steamworks library and the Mesa changes, are in [release-support](release-support). Working notes from development are in [docs/research](docs/research).
 
-Autorun is built from these projects; each keeps its own copyright and license.
+## Contributing
 
-| Project | License | Used for |
-|---|---|---|
-| [Wine](https://www.winehq.org) | LGPL-2.1-or-later | The Windows API, loader and graphics layers; this repository is a Wine fork |
-| [FEX](https://github.com/FEX-Emu/FEX) | MIT | Running 32-bit and 64-bit x86 code |
-| [Box64](https://github.com/ptitSeb/box64) (ptitSeb and contributors) | MIT | Running 32-bit x86 code |
-| [DXVK](https://github.com/doitsujin/dxvk) | zlib/libpng | Direct3D 8 to 11 over Vulkan |
-| [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) | LGPL-2.1-or-later | Direct3D 12 over Vulkan |
-| [Mesa](https://mesa3d.org) and [mesa-switch](https://github.com/danfromtico/mesa-switch) | MIT (mostly) | OpenGL and Vulkan on the Switch's GPU |
-| [LSFG-VK](https://git.lsfg-vk.dev/lsfg-vk-archive.git) | GPL-3.0-or-later | Frame generation |
-| [libusbhsfs](https://github.com/ITotalJustice/libusbhsfs) | ISC | USB drives |
-| [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) and [Horizon-OC](https://github.com/Horizon-OC/Horizon-OC) | GPL-2.0 | The boot changes Quick setup installs |
-| [libnx](https://github.com/switchbrew/libnx) and [devkitPro](https://devkitpro.org) | ISC, per component | The Switch system library and toolchain |
-| [SDL2, SDL2_ttf](https://www.libsdl.org), [FreeType](https://freetype.org), [HarfBuzz](https://harfbuzz.github.io), [libpng](http://www.libpng.org), [zlib](https://zlib.net) | zlib, FTL, MIT, libpng | The launcher |
-| [dolphin-nx](https://github.com/NaGaa95/dolphin-nx) (NaGaa95) | GPL-2.0-or-later | The look of the launcher, which is Autorun's own code |
+Bug reports and precise compatibility results are welcome, in English or Russian. See [CONTRIBUTING.md](CONTRIBUTING.md). Review logs before sharing them, and never upload `steam-session.vault`, passwords, tokens or sign-in QR codes.
 
-The full list, with authors and the projects used as reference, is in
-[documentation/technical.md](documentation/technical.md#credits).
+## Licence and credits
+
+Wine and the Horizon changes to it are under the LGPL-2.1-or-later; see [LICENSE](LICENSE) and [COPYING.LIB](COPYING.LIB). Other components keep their own licences, listed in [NOTICES.md](NOTICES.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and inside the package under `switch/wine/licenses`. Full acknowledgements are in [CREDITS.md](CREDITS.md). The original project's introduction is kept as [README.upstream.md](README.upstream.md).
+
+CorkDeck is not affiliated with or endorsed by Nintendo, Valve, Microsoft or the Autorun project. Nintendo Switch, Steam, Steam Deck, SteamOS and Windows are trademarks of their owners.

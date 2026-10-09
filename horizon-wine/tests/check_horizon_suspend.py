@@ -43,6 +43,7 @@ fixture = r'''
 #define TRACE(...) ((void)0)
 ''' + definitions + '\n' + structures + r'''
 struct horizon_server_object {
+    unsigned refs;
     struct horizon_thread_state thread;
     struct context_data *thread_contexts;
     unsigned thread_context_count;
@@ -51,11 +52,26 @@ struct horizon_server_object {
 struct horizon_server_connection { int reply_fd; struct horizon_server_object *thread; void *direct_reply; };
 struct horizon_user_apc { unsigned size; unsigned char call[HORIZON_APC_CALL_SIZE]; };
 static struct horizon_server_object target;
+static int capture_never_ready, close_during_capture, freed;
+static unsigned long long fake_tick;
+static long long test_wall_clock;
+static int system_apc_ready;
+static unsigned long long horizon_interrupt_time(void) {
+    if (capture_never_ready) fake_tick += 20000000ULL;
+    return fake_tick;
+}
+static void horizon_trace(const char *fmt, ...) { (void)fmt; }
+static void horizon_server_free_object(struct horizon_server_object *object) {
+    assert(object == &target && !object->refs && object->thread.terminated);++freed;
+}
 static pthread_mutex_t horizon_server_objects_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static struct { char reply[64]; _Alignas(8) char data[4096]; unsigned size; } replies[2];
 static void horizon_server_signal_changed_locked(void) { pthread_cond_broadcast(&changed); }
 static void horizon_server_sleep_locked(long long timeout) {
+    if (close_during_capture) {
+        assert(target.refs == 2);target.refs--;target.thread.terminated=1;return;
+    }
     (void)timeout; assert(!pthread_cond_wait(&changed, &horizon_server_objects_mutex));
 }
 static void horizon_server_quit_check_locked(void) {}
@@ -78,13 +94,17 @@ static int horizon_server_select_polls_locked(const void *r, const void *d, unsi
 static int horizon_server_select_signals(const void *r, const void *d, unsigned s) { (void)r; (void)d; (void)s; return 0; }
 static unsigned horizon_server_wait_object_locked(unsigned h, int consume) { (void)h; (void)consume; assert(0); return 0; }
 static unsigned horizon_server_signal_object_locked(unsigned h) { (void)h; assert(0); return 0; }
-static unsigned horizon_server_async_apc_locked(void *c, void *d) { (void)c; (void)d; return 0; }
+static unsigned horizon_server_async_apc_locked(void *c, void *d) {
+    unsigned type=HORIZON_APC_ASYNC_IO;
+    (void)c;if (!system_apc_ready) return 0;
+    system_apc_ready=0;memcpy(d,&type,sizeof(type));return 42;
+}
 static struct horizon_user_apc *horizon_server_take_user_apc_locked(void *t) { (void)t; return NULL; }
 static void horizon_report_user_apc(const char *m, unsigned tid, unsigned size, unsigned status) { (void)m; (void)tid; (void)size; (void)status; }
 static void horizon_server_update_timers_locked(void) {}
 static unsigned horizon_server_select_status(const void *r, const void *d, unsigned s) { (void)r; (void)d; (void)s; return STATUS_TIMEOUT; }
 NTSTATUS WINAPI NtQueryPerformanceCounter(LARGE_INTEGER *n, LARGE_INTEGER *p) { (void)p; n->QuadPart = 0; return 0; }
-NTSTATUS WINAPI NtQuerySystemTime(LARGE_INTEGER *n) { n->QuadPart = 0; return 0; }
+NTSTATUS WINAPI NtQuerySystemTime(LARGE_INTEGER *n) { n->QuadPart = test_wall_clock; return 0; }
 '''
 fixture += legacy_sync_support(source)
 functions = '\n'.join(block(source, name) for name in (
@@ -92,6 +112,7 @@ functions = '\n'.join(block(source, name) for name in (
     'static int horizon_server_handle_resume_thread(',
     'static int horizon_server_handle_suspend_thread(',
     'static void horizon_server_merge_context(',
+    'static unsigned int horizon_server_wait_thread_context_locked(',
     'static int horizon_server_handle_get_thread_context(',
     'static int horizon_server_handle_set_thread_context(',
     'static int horizon_server_handle_select('))
@@ -102,8 +123,9 @@ static CHPE_V2_CPU_AREA_INFO area;
 static TEB teb;
 static NTSTATUS reply_status(void) { return ((struct horizon_server_reply_header *)replies[0].reply)->error; }
 static void *select_thread(void *arg) {
-    unsigned count = (uintptr_t)arg;
-    struct horizon_select_request request = {.header.reply_size = 4096};
+    unsigned count = (uintptr_t)arg & 3;
+    struct horizon_select_request request = {.header.reply_size = 4096,
+        .timeout = ((uintptr_t)arg & 4) ? 1 : 0};
     struct { char apc[HORIZON_APC_RESULT_SIZE]; struct context_data contexts[2]; } data = {0};
     data.contexts[0].machine = IMAGE_FILE_MACHINE_ARM64;
     data.contexts[0].flags = SERVER_CTX_CONTROL | SERVER_CTX_INTEGER;
@@ -132,6 +154,7 @@ int main(void) {
     struct context_data update = {.machine = IMAGE_FILE_MACHINE_ARM64, .flags = SERVER_CTX_CONTROL};
     struct context_data *returned;
     target.thread.started = 1;
+    target.refs = 1;
     target.thread.teb = (uintptr_t)&teb;
     teb.ChpeV2CpuAreaInfo = &area;
     area.SuspendDoorbell = &doorbell;
@@ -151,6 +174,20 @@ int main(void) {
             update.ctl.arm64_regs.pc = 0x22222222;
             assert(!horizon_server_handle_set_thread_context(&control, (void *)&set, (void *)&update, sizeof(update)));
             assert(!reply_status());
+            if (count == 2) {
+                struct context_data guest_update = {.machine = IMAGE_FILE_MACHINE_I386,
+                                                     .flags = SERVER_CTX_CONTROL};
+                get.machine = IMAGE_FILE_MACHINE_I386;
+                assert(!horizon_server_handle_get_thread_context(&control, (void *)&get) && !reply_status());
+                returned = (void *)replies[0].data;
+                assert(returned->machine == IMAGE_FILE_MACHINE_I386 &&
+                       returned->ctl.i386_regs.eip == 0x12340000 && returned->flags == SERVER_CTX_CONTROL);
+                guest_update.ctl.i386_regs.eip = 0x33330000;
+                assert(!horizon_server_handle_set_thread_context(&control, (void *)&set,
+                                                                (void *)&guest_update, sizeof(guest_update)));
+                assert(!reply_status());
+                get.machine = IMAGE_FILE_MACHINE_ARM64;
+            }
         }
         resume();
         assert(target.thread.suspend == 1 && doorbell && target.thread_context_valid);
@@ -161,9 +198,44 @@ int main(void) {
             assert(replies[1].size == HORIZON_APC_CALL_SIZE + count * sizeof(struct context_data));
             returned = (void *)(replies[1].data + HORIZON_APC_CALL_SIZE);
             assert(returned->ctl.arm64_regs.pc == 0x22222222);
-            if (count == 2) assert(returned[1].ctl.i386_regs.eip == 0x12340000);
+            if (count == 2) assert(returned[1].ctl.i386_regs.eip == 0x33330000);
         }
     }
+    /* Resume must not turn an ordinary timed wait into a successful signal. */
+    test_wall_clock=2;suspend();
+    assert(!pthread_create(&thread,NULL,select_thread,(void *)(uintptr_t)6));
+    pthread_mutex_lock(&horizon_server_objects_mutex);
+    while (!target.thread_context_valid) pthread_cond_wait(&changed,&horizon_server_objects_mutex);
+    pthread_mutex_unlock(&horizon_server_objects_mutex);
+    resume();assert(!pthread_join(thread,NULL));
+    assert(((struct horizon_server_reply_header *)replies[1].reply)->error==STATUS_TIMEOUT);
+    assert(replies[1].size==HORIZON_APC_CALL_SIZE+2*sizeof(struct context_data));
+    /* Suspension snapshots must not replace a queued system APC payload. */
+    suspend();
+    assert(!pthread_create(&thread,NULL,select_thread,(void *)(uintptr_t)6));
+    pthread_mutex_lock(&horizon_server_objects_mutex);
+    while (!target.thread_context_valid) pthread_cond_wait(&changed,&horizon_server_objects_mutex);
+    system_apc_ready=1;
+    pthread_mutex_unlock(&horizon_server_objects_mutex);
+    resume();assert(!pthread_join(thread,NULL));
+    assert(((struct horizon_server_reply_header *)replies[1].reply)->error==STATUS_KERNEL_APC);
+    assert(*(unsigned *)replies[1].data==HORIZON_APC_ASYNC_IO);
+    assert(replies[1].size==HORIZON_APC_CALL_SIZE+2*sizeof(struct context_data));
+    test_wall_clock=0;
+    /* Requesting a snapshot before guest initialization or for the wrong
+     * architecture reports an explicit failure, never caller registers. */
+    target.thread.suspend=1;target.thread.started=0;
+    assert(!horizon_server_handle_get_thread_context(&control,(void *)&get));
+    assert(reply_status()==STATUS_NOT_SUPPORTED && !replies[0].size && target.refs==1);
+    target.thread.started=1;capture_never_ready=1;
+    assert(!horizon_server_handle_get_thread_context(&control,(void *)&get));
+    assert(reply_status()==STATUS_NOT_SUPPORTED && !replies[0].size && target.refs==1);
+    assert(!horizon_server_handle_set_thread_context(&control,(void *)&set,(void *)&update,sizeof(update)));
+    assert(reply_status()==STATUS_NOT_SUPPORTED && target.refs==1);
+    capture_never_ready=0;close_during_capture=1;
+    assert(!horizon_server_handle_get_thread_context(&control,(void *)&get));
+    assert(reply_status()==STATUS_ACCESS_DENIED && !replies[0].size && freed==1);
+    close_during_capture=0;target.refs=1;target.thread.terminated=0;target.thread.suspend=0;
     suspend(); resume();
     select_thread((void *)1);
     assert(!target.thread_contexts && !target.thread_context_valid);
@@ -183,6 +255,8 @@ resume_test = r'''
 #include "winbase.h"
 #include "winternl.h"
 #define __SWITCH__
+/* This fixture runs on x86-64 but exercises the ARM64 continuation guard. */
+#define CONTEXT ARM64_NT_CONTEXT
 static TEB teb;
 #undef NtCurrentTeb
 #define NtCurrentTeb() (&teb)
@@ -285,7 +359,7 @@ with tempfile.TemporaryDirectory(prefix='wine-nx-suspend-') as directory:
     (path / 'test.c').write_text(fixture + functions + tests)
     subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11', '-g', '-O1',
                     '-fms-extensions', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers',
-                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-pthread', '-D__WINESRC__', '-D_WIN64',
+                    '-fsanitize=address,undefined', '-no-pie', '-fno-sanitize-recover=all', '-pthread', '-D__WINESRC__', '-D_WIN64',
                     '-I' + str(root / 'include'), '-I' + str(root / 'dlls/ntdll/unix'),
                     str(path / 'test.c'), '-o', str(path / 'test')], check=True)
     subprocess.run([str(path / 'test')], check=True, timeout=30)
@@ -293,7 +367,7 @@ with tempfile.TemporaryDirectory(prefix='wine-nx-suspend-') as directory:
         (path / f'{name}.c').write_text(text)
         subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11', '-g', '-O1',
                         '-fms-extensions', '-Wall', '-Wextra', '-Werror',
-                        '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-pthread',
+                        '-fsanitize=address,undefined', '-no-pie', '-fno-sanitize-recover=all', '-pthread',
                         '-D__WINESRC__', '-D_WIN64', '-I' + str(root / 'include'),
                         str(path / f'{name}.c'), '-o', str(path / name)], check=True)
         subprocess.run([str(path / name)], check=True, timeout=30)

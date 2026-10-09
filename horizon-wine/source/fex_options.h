@@ -45,8 +45,8 @@ struct nx_fex_option
 static const struct nx_fex_option nx_fex_options[NX_FEX_OPTION_COUNT] =
 {
     { NX_FEX_TSO, "FEX_TSOENABLED",
-      "Emulates x86 total store ordering. Off is faster and is Autorun's default; enable it for games with memory-ordering bugs.",
-      0, 0, 2, { "0", "1" }, { "0 - Off", "1 - On" } },
+      "Emulates x86 total store ordering. On is the safe default for multithreaded games. Off can improve speed but may break synchronization.",
+      0, 1, 2, { "0", "1" }, { "0 - Off", "1 - On" } },
     { NX_FEX_MULTIBLOCK, "FEX_MULTIBLOCK",
       "Compiles multiple connected guest blocks together. This usually improves execution speed but increases compilation work and code size.",
       0, 1, 2, { "0", "1" }, { "0 - Off", "1 - On" } },
@@ -59,7 +59,7 @@ static const struct nx_fex_option nx_fex_options[NX_FEX_OPTION_COUNT] =
       0, 0, 3, { "none", "mtrack", "full" }, { "None", "MTrack", "Full" } },
     { NX_FEX_DISABLE_L2, "FEX_DISABLEL2CACHE",
       "Disables the JIT L2 lookup cache to save memory. Turning it off may reduce lookup stutter at a higher memory cost.",
-      0, 1, 2, { "0", "1" }, { "0 - L2 enabled", "1 - L2 disabled" } },
+      0, 0, 2, { "0", "1" }, { "0 - L2 enabled", "1 - L2 disabled" } },
     { NX_FEX_DYNAMIC_L1, "FEX_DYNAMICL1CACHE",
       "Dynamically sizes each thread's JIT L1 cache to reduce memory use.",
       0, 1, 2, { "0", "1" }, { "0 - Off", "1 - On" } },

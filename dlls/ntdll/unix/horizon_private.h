@@ -84,6 +84,12 @@ struct horizon_lifecycle_counters
 extern struct horizon_lifecycle_counters horizon_lifecycle;
 extern void horizon_lifecycle_baseline(void);
 extern void horizon_lifecycle_report( const char *tag, unsigned int tid, int code );
+#if defined(__aarch64__)
+struct context_data;
+extern int horizon_capture_context( CONTEXT *context );
+extern void horizon_wait_context_to_server( struct context_data *contexts, CONTEXT *context );
+extern void horizon_wait_context_from_server( CONTEXT *context, struct context_data *contexts );
+#endif
 #endif
 
 #endif /* __NTDLL_UNIX_HORIZON_PRIVATE_H */

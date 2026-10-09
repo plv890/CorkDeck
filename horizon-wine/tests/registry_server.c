@@ -28,9 +28,10 @@ struct horizon_server_reply_header { unsigned int error, reply_size; };
 #define HORIZON_STATUS_NOT_IMPLEMENTED 0xc0000002u
 #define HORIZON_SERVER_OBJECT_REG_KEY 1
 #define HORIZON_SERVER_OBJECT_EVENT 2
+#define HORIZON_SERVER_OBJECT_TOKEN 3
 struct horizon_server_connection { int reply_fd; };
 struct horizon_server_object { int type; unsigned int refs, signaled; struct horizon_reg_key *reg_key; };
-struct horizon_server_handle_entry { unsigned int handle; struct horizon_server_object *object; };
+struct horizon_server_handle_entry { unsigned int handle,access; struct horizon_server_object *object; };
 struct horizon_object_attributes { unsigned int rootdir, attributes, sd_len, name_len; };
 struct horizon_object_name { unsigned int rootdir, name_len; const unsigned char *name; };
 static struct horizon_reg horizon_registry;
@@ -242,12 +243,21 @@ static void test_save_and_load(void)
     static const unsigned short physx[] = u"Software\\NVIDIA Corporation\\PhysX\\Runtimes";
     static const unsigned short core_path[] = u"PhysXCore Path", engine[] = u"C:\\physx\\Engine";
     static const unsigned short custom_engine[] = u"C:\\custom\\Engine";
+    static const unsigned short profiles[] = u"Software\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
+    static const unsigned short profiles_name[] = u"ProfilesDirectory", profiles_dir[] = u"C:\\users";
+    static const unsigned short custom_profiles[] = u"C:\\profiles";
     unsigned char binary[100], odd_data[3] = {1, 2, 3}, one[4] = {1, 0, 0, 0};
     unsigned int dword = 0x12345678, i;
     struct horizon_reg_key *key, *user;
     char path[512], tmp[512], user_file[512], text_file[8192];
 
     for (i = 0; i < sizeof(binary); i++) binary[i] = i * 7;
+    check_value(machine_key(), profiles, sizeof(profiles)-2, profiles_name, sizeof(profiles_name)-2,
+                HORIZON_REG_SZ, profiles_dir, sizeof(profiles_dir));
+    key = open_key(machine_key(), profiles, sizeof(profiles)-2);
+    assert(!horizon_reg_set_value(&horizon_registry,key,profiles_name,sizeof(profiles_name)-2,
+                                  HORIZON_REG_SZ,custom_profiles,sizeof(custom_profiles)));
+    horizon_reg_release(&horizon_registry,key);
     check_value(machine_key(), physx, sizeof(physx) - 2, core_path, sizeof(core_path) - 2,
                 HORIZON_REG_SZ, engine, sizeof(engine));
     key = open_key(machine_key(), physx, sizeof(physx) - 2);
@@ -292,6 +302,8 @@ static void test_save_and_load(void)
     reload();
     check_value(machine_key(), physx, sizeof(physx) - 2, core_path, sizeof(core_path) - 2,
                 HORIZON_REG_SZ, custom_engine, sizeof(custom_engine));
+    check_value(machine_key(), profiles, sizeof(profiles)-2, profiles_name, sizeof(profiles_name)-2,
+                HORIZON_REG_SZ, custom_profiles, sizeof(custom_profiles));
     check_value(machine_key(), seed, sizeof(seed) - 2, none, 0, HORIZON_REG_SZ, mmdevapi, sizeof(mmdevapi));
     /* wine.inf's paging file, which Aspyr's AWL.dll wants a drive in. */
     check_value(machine_key(), memory, sizeof(memory) - 2, paging_name, sizeof(paging_name) - 2, HORIZON_REG_SZ,

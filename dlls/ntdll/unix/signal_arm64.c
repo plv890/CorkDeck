@@ -96,8 +96,12 @@ void *get_native_context( CONTEXT *context )
 
 void *get_wow_context( CONTEXT *context )
 {
+    WOW64_CPURESERVED *cpu = NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED];
     (void)context;
-    return NULL;
+    /* Suspend/restart must serialize the guest registers as well as native
+     * ARM64 registers. Native registers cannot be converted into x86 state. */
+    if (!cpu || cpu->Machine != main_image_info.Machine) return NULL;
+    return get_cpu_area( get_thread_data(), main_image_info.Machine );
 }
 
 extern int horizon_capture_context( CONTEXT *context );
@@ -117,31 +121,64 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
     NTSTATUS status;
 
     status = get_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_ARM64 );
+    if (status) horizon_trace( "[THREAD CONTEXT] native get target=%p status=%08x\n", handle, status );
     if (status || !self) return status;
     return horizon_capture_context( context ) ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
 }
 
-static NTSTATUS check_current_thread_context_access( HANDLE handle, ACCESS_MASK access )
+static NTSTATUS check_thread_context_access( HANDLE handle, ACCESS_MASK access, BOOL *self )
 {
     OBJECT_BASIC_INFORMATION info;
     NTSTATUS status;
 
-    if (handle == GetCurrentThread()) return STATUS_SUCCESS;
+    *self = (handle == GetCurrentThread());
+    if (*self) return STATUS_SUCCESS;
     status = NtCompareObjects( handle, GetCurrentThread() );
-    if (status == STATUS_NOT_SAME_OBJECT) return STATUS_NOT_IMPLEMENTED;
-    if (status) return status;
+    if (status && status != STATUS_NOT_SAME_OBJECT)
+    {
+        horizon_trace( "[WOW64 CONTEXT] compare target=%p status=%08x\n", handle, status );
+        return status;
+    }
+    *self = !status;
     status = NtQueryObject( handle, ObjectBasicInformation, &info, sizeof(info), NULL );
-    if (status) return status;
-    return (info.GrantedAccess & access) == access ? STATUS_SUCCESS : STATUS_ACCESS_DENIED;
+    if (status)
+    {
+        horizon_trace( "[WOW64 CONTEXT] query access target=%p status=%08x\n", handle, status );
+        return status;
+    }
+    if ((info.GrantedAccess & access) != access)
+    {
+        horizon_trace( "[WOW64 CONTEXT] denied target=%p requested=%08x granted=%08x\n",
+                       handle, access, info.GrantedAccess );
+        return STATUS_ACCESS_DENIED;
+    }
+    if (!*self)
+    {
+        static unsigned int traced;
+        if (__atomic_fetch_add( &traced, 1, __ATOMIC_RELAXED ) < 16)
+            horizon_trace( "[WOW64 CONTEXT] remote target=%p access=%08x\n", handle, access );
+    }
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS set_thread_wow64_context( HANDLE handle, const void *ctx, ULONG size )
 {
     WOW64_CPURESERVED *cpu = NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED];
     NTSTATUS status;
+    BOOL self;
 
     if (size != sizeof(I386_CONTEXT)) return STATUS_INFO_LENGTH_MISMATCH;
-    if ((status = check_current_thread_context_access( handle, THREAD_SET_CONTEXT ))) return status;
+    if (!ctx) return STATUS_INVALID_PARAMETER;
+    if (((const I386_CONTEXT *)ctx)->ContextFlags & (CONTEXT_I386_XSTATE & ~CONTEXT_i386))
+        return STATUS_NOT_SUPPORTED;
+    if ((status = check_thread_context_access( handle, THREAD_SET_CONTEXT, &self ))) return status;
+    if (!self)
+    {
+        status = set_thread_context( handle, ctx, &self, IMAGE_FILE_MACHINE_I386 );
+        if (status) horizon_trace( "[WOW64 CONTEXT] set target=%p flags=%08x status=%08x\n",
+                                   handle, ((const I386_CONTEXT *)ctx)->ContextFlags, status );
+        if (status || !self) return status;
+    }
     if (!cpu) return STATUS_INVALID_PARAMETER;
     return horizon_transfer_i386_context( cpu,
                                           get_cpu_area( get_thread_data(), IMAGE_FILE_MACHINE_I386 ),
@@ -152,9 +189,22 @@ NTSTATUS get_thread_wow64_context( HANDLE handle, void *ctx, ULONG size )
 {
     WOW64_CPURESERVED *cpu = NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED];
     NTSTATUS status;
+    BOOL self;
 
     if (size != sizeof(I386_CONTEXT)) return STATUS_INFO_LENGTH_MISMATCH;
-    if ((status = check_current_thread_context_access( handle, THREAD_GET_CONTEXT ))) return status;
+    if (!ctx) return STATUS_INVALID_PARAMETER;
+    if (((const I386_CONTEXT *)ctx)->ContextFlags & (CONTEXT_I386_XSTATE & ~CONTEXT_i386))
+        return STATUS_NOT_SUPPORTED;
+    if ((status = check_thread_context_access( handle, THREAD_GET_CONTEXT, &self ))) return status;
+    if (!self)
+    {
+        /* The server owns the suspended target's native/guest snapshots.
+         * Never return the caller's CPU area for a different thread. */
+        status = get_thread_context( handle, ctx, &self, IMAGE_FILE_MACHINE_I386 );
+        if (status) horizon_trace( "[WOW64 CONTEXT] get target=%p flags=%08x status=%08x\n",
+                                   handle, ((I386_CONTEXT *)ctx)->ContextFlags, status );
+        if (status || !self) return status;
+    }
     if (!cpu) return STATUS_INVALID_PARAMETER;
     return horizon_transfer_i386_context( cpu,
                                           get_cpu_area( get_thread_data(), IMAGE_FILE_MACHINE_I386 ), ctx, FALSE );

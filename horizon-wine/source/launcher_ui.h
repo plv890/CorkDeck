@@ -52,6 +52,7 @@ struct ui_input
 #define UI_TEXT_CACHE    192
 #define UI_TEXT_KEY      160
 #define UI_FOOTER_HINTS  10
+#define UI_NOTES         12
 #define UI_HEADER_HEIGHT 80
 /* Every header keeps these, so the clock and the battery do not move from one
  * screen to the next. */
@@ -90,6 +91,7 @@ struct ui
     SDL_Texture *glyphs[16];
 
     int animations;
+    int muted;          /* interface sounds are off */
     SDL_Color background, text, dim, value, selection, panel, card, focus, success, danger;
 
     struct ui_text_entry cache[UI_TEXT_CACHE];
@@ -141,6 +143,20 @@ struct ui
     char toast[160];
     Uint32 toast_since, toast_until;
     int toast_notice;
+
+    /* What has been announced, newest first, for the quick panel to list. */
+    struct ui_note { char text[160]; int hour, minute; } notes[UI_NOTES];
+    int note_count;
+    /* The clock for a note's time; NULL leaves it out. */
+    int (*note_clock)( int *hour, int *minute );
+    /* Minus and Plus inside a list screen: the shell's side menus. A non-zero
+     * answer closes the list, as going back would. */
+    int (*global_key)( void *data, int button );
+    void *global_data;
+    /* Every text drawn goes through this first: the interface's language. */
+    const char *(*translate)( const char *text );
+    /* What the person did and was shown, a line each, for the log. */
+    void (*trace)( const char *line );
 };
 
 int  ui_init( struct ui *ui, const void *font_data, size_t font_size, int animations );

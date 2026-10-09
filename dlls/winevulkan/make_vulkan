@@ -751,6 +751,14 @@ class Function(Type):
 
     def body(self, conv, conversions, params_prefix=""):
         body = ""
+        nx_perf = {
+            "vkQueuePresentKHR": "NX_PERF_PRESENT", "vkQueueSubmit": "NX_PERF_SUBMIT",
+            "vkQueueSubmit2": "NX_PERF_SUBMIT", "vkQueueSubmit2KHR": "NX_PERF_SUBMIT",
+            "vkWaitForFences": "NX_PERF_FENCE", "vkWaitSemaphores": "NX_PERF_FENCE",
+            "vkWaitSemaphoresKHR": "NX_PERF_FENCE", "vkAcquireNextImageKHR": "NX_PERF_ACQUIRE",
+            "vkAcquireNextImage2KHR": "NX_PERF_ACQUIRE", "vkCreateGraphicsPipelines": "NX_PERF_PIPELINE",
+            "vkCreateComputePipelines": "NX_PERF_PIPELINE",
+        }.get(self.name) if params_prefix == "params->" else None
         needs_alloc = False
         deferred_op = None
 
@@ -776,6 +784,8 @@ class Function(Type):
         if needs_alloc:
             body += "    struct conversion_context local_ctx;\n"
             body += "    struct conversion_context *ctx = &local_ctx;\n"
+        if nx_perf:
+            body += f"    NX_VK_PERF_BEGIN({nx_perf});\n"
         body += "\n"
 
         if not self.is_perf_critical():
@@ -834,6 +844,8 @@ class Function(Type):
                 body += "    "
             body += "    free_conversion_context(ctx);\n"
 
+        if nx_perf:
+            body += f"    NX_VK_PERF_END({nx_perf});\n"
         # Finally return the result. Performance critical functions return void to allow tail calls.
         if not self.is_perf_critical():
             body += "    return STATUS_SUCCESS;\n"
@@ -2373,6 +2385,7 @@ class Generator(object):
         f.write("#include <stdlib.h>\n\n")
 
         f.write("#include \"vulkan_private.h\"\n\n")
+        f.write("#include \"nx_performance.h\"\n\n")
 
         f.write("WINE_DEFAULT_DEBUG_CHANNEL(vulkan);\n\n")
 

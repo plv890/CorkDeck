@@ -63,7 +63,7 @@ static int run_job(struct ui *ui, struct setup_job *job)
     ui_progress_begin(ui);
     while (!SDL_AtomicGet(&job->done))
     {
-        ui_progress_update(ui, "Autorun setup", job->forwarder ? "Installing the forwarder..." :
+        ui_progress_update(ui, "CorkDeck setup", job->forwarder ? "Installing the forwarder..." :
                            "Verifying patches and saving the boot entry...", 0, 0);
         SDL_Delay(16);
     }
@@ -81,11 +81,11 @@ static int run_job(struct ui *ui, struct setup_job *job)
 static int confirm_install(struct ui *ui, const struct wine_nx_launcher_options *options)
 {
     char message[384];
-    snprintf(message, sizeof(message), "This installs Autorun on the HOME menu. Installing unofficial titles "
+    snprintf(message, sizeof(message), "This installs CorkDeck on the HOME menu. Installing unofficial titles "
              "can lead to a console ban. Use emuMMC.\n\n%s",
              options->emummc > 0 ? "This console is on emuMMC." : options->emummc == 0 ?
              "This console is NOT on emuMMC." : "The current emuMMC status could not be checked.");
-    return ui_confirm(ui, "Install Autorun forwarder?", message, "Install");
+    return ui_confirm(ui, "Install CorkDeck forwarder?", message, "Install");
 }
 
 static int running_atmosphere_matches(const struct setup_boot_manifest *manifest)
@@ -126,7 +126,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
 #endif
     if (manifest && !romfs_mounted)
     {
-        ui_message(ui, "Setup", "Could not open bundled boot patches from Autorun.");
+        ui_message(ui, "Setup", "Could not open bundled boot patches from CorkDeck.");
         free(entries);
         return 0;
     }
@@ -165,15 +165,15 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
         switch (step)
         {
         case STEP_FORWARDER:
-            snprintf(description, sizeof(description), "Start Autorun directly from the HOME Menu with a 39-bit address space "
+            snprintf(description, sizeof(description), "Start CorkDeck directly from the HOME Menu with a 39-bit address space "
                      "and access to all four CPU cores. The next steps enable low-address memory for Win32 games.");
-            notice = forwarder ? "Your Autorun forwarder is ready." : "This session was not started from the current Autorun forwarder.";
+            notice = forwarder ? "Your CorkDeck forwarder is ready." : "This session was not started from the current CorkDeck forwarder.";
             items[0] = forwarder ? "Continue" : "Install forwarder";
-            notes[0] = forwarder ? "Set up the loader and kernel patches" : "Add Autorun to the HOME Menu";
+            notes[0] = forwarder ? "Set up the loader and kernel patches" : "Add CorkDeck to the HOME Menu";
             disabled[0] = !forwarder && !options->install_forwarder;
             break;
         case STEP_DLLS:
-            snprintf(description, sizeof(description), "Games run on Windows DLLs that Autorun downloads from its DLL "
+            snprintf(description, sizeof(description), "Games run on Windows DLLs that CorkDeck downloads from its DLL "
                      "repository on GitHub, once, and keeps up to date from Settings > System > Windows DLLs. "
                      "A game started without them sends you to that screen.");
             snprintf(dlls_status, sizeof(dlls_status), "%s", launcher_dlls_status(dlls, dlls_text, sizeof(dlls_text), &tone));
@@ -188,7 +188,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             }
             break;
         case STEP_LOADER:
-            snprintf(description, sizeof(description), "Choose the loader for the Autorun boot entry. "
+            snprintf(description, sizeof(description), "Choose the loader for the CorkDeck boot entry. "
                      "Stock patches use separate files. The HOC option updates atmosphere/kips/hoc.kip and keeps its settings when selected.");
             notice = manifest ? "Patches are bundled and verified against the selected Atmosphere package." :
                                 "Boot patches are not bundled in this build.";
@@ -223,15 +223,15 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             count = 2;
             break;
         case STEP_MESOSPHERE:
-            snprintf(description, sizeof(description), "The Mesosphere low-window patch lets a 39-bit Autorun process "
+            snprintf(description, sizeof(description), "The Mesosphere low-window patch lets a 39-bit CorkDeck process "
                      "place Win32 game memory below 4 GiB, while native code and JIT caches stay above it.");
-            notice = "The kernel and loader must match your supported Atmosphere build. The low-window change only applies to Autorun.";
+            notice = "The kernel and loader must match your supported Atmosphere build. The low-window change only applies to CorkDeck.";
             items[0] = "Choose a Hekate boot entry";
             notes[0] = "Select the configuration to copy";
             break;
         case STEP_ENTRY:
             snprintf(description, sizeof(description), "Choose the entry to copy from bootloader/hekate_ipl.ini. "
-                     "Autorun keeps its other boot settings and uses the bundled loader, kernel and security monitor. The original is kept.%s%s",
+                     "CorkDeck keeps its other boot settings and uses the bundled loader, kernel and security monitor. The original is kept.%s%s",
                      entry_count ? "" : "\n\n", entry_count ? "" : detail[0] ? detail : setup_boot_error(status));
             count = (int)entry_count;
             for (int i = 0; i < count; i++) { items[i] = entries[i].name; disabled[i] = !entries[i].supported; }
@@ -241,11 +241,11 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             if (installed)
             {
                 snprintf(title, sizeof(title), "Setup complete");
-                snprintf(description, sizeof(description), "Reboot into Hekate and select the Autorun boot entry, "
-                         "then open Autorun from the HOME Menu.");
+                snprintf(description, sizeof(description), "Reboot into Hekate and select the CorkDeck boot entry, "
+                         "then open CorkDeck from the HOME Menu.");
                 notice = "Restart uses the console's configured reboot target. If Hekate does not appear, enter it using your usual method.";
                 items[0] = "Restart console";
-                notes[0] = "Select the Autorun boot entry in Hekate";
+                notes[0] = "Select the CorkDeck boot entry in Hekate";
             }
             else
             {
@@ -256,7 +256,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
                          "Patch files are not bundled yet. No boot files have been changed. Return to Quick setup when they are available.";
                 items[0] = updating ? "Update boot patches" : "Install boot patches";
                 disabled[0] = !manifest;
-                notes[0] = updating ? "Replace the existing Autorun boot entry" : "Verify files and create the Autorun boot entry";
+                notes[0] = updating ? "Replace the existing CorkDeck boot entry" : "Verify files and create the CorkDeck boot entry";
             }
             break;
         }
@@ -330,12 +330,12 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             case STEP_FINISH:
                 if (installed)
                 {
-                    if (ui_confirm(ui, "Restart console?", "Autorun will close and restart the console.", "Restart"))
+                    if (ui_confirm(ui, "Restart console?", "CorkDeck will close and restart the console.", "Restart"))
                     { result = 2; goto done; }
                 }
                 else if (ui_confirm(ui, updating ? "Update boot patches?" : "Install boot patches?",
-                                    updating ? "The Autorun boot entry and its patches will be updated." :
-                                               "A separate Autorun boot entry will be added. Your existing boot entry will be kept.",
+                                    updating ? "The CorkDeck boot entry and its patches will be updated." :
+                                               "A separate CorkDeck boot entry will be added. Your existing boot entry will be kept.",
                                     updating ? "Update" : "Install"))
                 {
                     job.forwarder = 0;
@@ -354,23 +354,11 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
         ui_gradient(ui, 0, 0, ui->width, ui->height, (SDL_Color){3, 6, 10, 156},
                     (SDL_Color){3, 6, 10, 20}, 1);
         ui_rounded(ui, 166, 78, 960, 584, 26, (SDL_Color){0, 0, 0, 120});
-        ui_rounded(ui, 160, 68, 960, 584, 26, (SDL_Color){22, 27, 30, 250});
-        ui_outline(ui, 160, 68, 960, 584, 26, 1, (SDL_Color){236, 240, 246, 85});
-        if (logo)
-        {
-            int w, h;
-            if (!SDL_QueryTexture(logo, NULL, NULL, &w, &h) && w > 0 && h > 0)
-            {
-                float scale = 62.0f / (w > h ? w : h);
-                SDL_Rect mark = {196 + (62 - (int)(w * scale)) / 2, 91 + (62 - (int)(h * scale)) / 2,
-                                 (int)(w * scale), (int)(h * scale)};
-                SDL_SetTextureColorMod(logo, 255, 255, 255);
-                SDL_SetTextureAlphaMod(logo, 255);
-                SDL_RenderCopy(ui->renderer, logo, NULL, &mark);
-            }
-        }
-        ui_text(ui, ui->large, 276, 91, "Quick setup", ui->value);
-        ui_text(ui, ui->small, 276, 134, "Prepare Autorun for your console", ui->dim);
+        ui_rounded(ui, 160, 68, 960, 584, 26, (SDL_Color){ 24, 33, 44, 250 });
+        ui_outline(ui, 160, 68, 960, 584, 26, 2, (SDL_Color){ 58, 76, 98, 255 } );
+        (void)logo;
+        ui_text(ui, ui->large, 196, 91, "First set-up", ui->value);
+        ui_text(ui, ui->small, 196, 134, "Prepare CorkDeck for your console", ui->dim);
         {
             char position[24];
             snprintf(position, sizeof(position), "%d / %d", step + 1, STEP_COUNT);
@@ -394,7 +382,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
                 for (int j = 0; j < 8; j++) ui_rounded(ui, 202 + j, y + 25 - j, 2, 2, 1, ui->success);
             }
             else ui_text_centered(ui, ui->small, 205, y + (44 - TTF_FontHeight(ui->small)) / 2,
-                                  number, i == step ? (SDL_Color){22, 27, 30, 255} : ui->dim);
+                                  number, i == step ? (SDL_Color){ 24, 33, 44, 255 } : ui->dim);
             ui_text_fit(ui, ui->small, 230, y + (44 - TTF_FontHeight(ui->small)) / 2,
                         138, steps[i], color, 0);
         }
@@ -402,14 +390,14 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
         ui_text_wrapped(ui, ui->small, 424, 252, 652, step == STEP_ENTRY ? 5 : 4, description, ui->text, 0);
         if (notice)
         {
-            ui_rounded(ui, 420, 352, 668, 68, 12, (SDL_Color){30, 40, 42, 255});
+            ui_rounded(ui, 420, 352, 668, 68, 12, (SDL_Color){ 33, 44, 58, 255 });
             ui_fill(ui, 434, 366, 3, 40, ui->selection);
             ui_text_wrapped(ui, ui->small, 450, 363, 620, 2, notice, ui->dim, 0);
         }
         for (int i = top; i < count && i < top + 4; i++)
         {
             int y = items_y + (i - top) * row_h;
-            ui_rounded(ui, 420, y, 668, row_h - 6, 12, i == selected ? ui->focus : (SDL_Color){30, 36, 39, 192});
+            ui_rounded(ui, 420, y, 668, row_h - 6, 12, i == selected ? ui->focus : (SDL_Color){ 33, 44, 58, 255 });
             if (i == selected) ui_animated_border(ui, 420, y, 668, row_h - 6, 12, 2,
                                                  (SDL_Color){100, 110, 106, 180}, ui->selection);
             ui_text_fit(ui, ui->normal, 438, y + (notes[i] ? 6 : 9), 628, items[i],

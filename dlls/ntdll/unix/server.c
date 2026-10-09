@@ -408,8 +408,26 @@ unsigned int server_call_unlocked( void *req_ptr )
     struct __server_request_info * const req = req_ptr;
     unsigned int ret;
 #ifdef __SWITCH__
+    extern uint64_t wine_nx_request_begin(char, unsigned int, unsigned int, const char *, unsigned int,
+                                        int64_t, const void *, unsigned int, uint64_t) __attribute__((weak));
+    extern void wine_nx_request_end(uint64_t) __attribute__((weak));
     unsigned int code = req->u.req.request_header.req;
     u64 start = horizon_server_profile_enabled ? armGetSystemTick() : 0;
+    uint64_t trace_token = 0;
+    if (wine_nx_request_begin && wine_nx_request_end)
+    {
+        const void *words = (const char *)&req->u.req + sizeof(struct request_header);
+        unsigned int size = sizeof(req->u.req) - sizeof(struct request_header), flags = 0;
+        int64_t timeout = 0;
+        if (code == REQ_select)
+        {
+            flags = req->u.req.select_request.flags; timeout = req->u.req.select_request.timeout;
+            if (req->data_count > 1) { words = req->data[1].ptr; size = req->data[1].size; }
+            else { words = NULL; size = 0; }
+        }
+        trace_token = wine_nx_request_begin('c', data->tid, code, req->name, flags, timeout,
+                                           words, size, (uint64_t)(uintptr_t)__builtin_return_address(0));
+    }
 #endif
 
 #ifdef __SWITCH__
@@ -419,6 +437,7 @@ unsigned int server_call_unlocked( void *req_ptr )
     if (!(ret = send_request( data->request_fd, req )))
         ret = wait_reply( data->reply_fd, req );
 #ifdef __SWITCH__
+    if (wine_nx_request_end) wine_nx_request_end(trace_token);
     if (horizon_server_profile_enabled && code < REQ_NB_REQUESTS)
     {
         __atomic_store_n( &wine_nx_server_names[code], req->name, __ATOMIC_RELAXED );
@@ -852,7 +871,7 @@ static void invoke_system_apc( const union apc_call *call, union apc_result *res
 /***********************************************************************
  *              server_select
  */
-unsigned int server_select( const union select_op *select_op, data_size_t size, UINT flags,
+static unsigned int server_select_context( const union select_op *select_op, data_size_t size, UINT flags,
                             timeout_t abs_timeout, struct context_data *context, struct user_apc *user_apc )
 {
     unsigned int ret;
@@ -901,8 +920,19 @@ unsigned int server_select( const union select_op *select_op, data_size_t size, 
             }
             SERVER_END_REQ;
 
+#ifdef __SWITCH__
+            if (reply_size > sizeof(reply_data.call) && context)
+            {
+                memcpy( context, reply_data.context, reply_size - sizeof(reply_data.call) );
+                context[0].flags &= ~SERVER_CTX_EXEC_SPACE;
+                context[1].flags &= ~SERVER_CTX_EXEC_SPACE;
+            }
+#endif
             if (ret != STATUS_KERNEL_APC) break;
             invoke_system_apc( &reply_data.call, &result, FALSE );
+#ifdef __SWITCH__
+            if (context) suspend_context = TRUE; /* new request retains updated snapshots */
+#endif
 
             /* don't signal multiple times */
             if (size >= sizeof(select_op->signal_and_wait) && select_op->op == SELECT_SIGNAL_AND_WAIT)
@@ -923,6 +953,34 @@ unsigned int server_select( const union select_op *select_op, data_size_t size, 
         context[1].flags &= ~SERVER_CTX_EXEC_SPACE;
     }
     return ret;
+}
+
+unsigned int server_select( const union select_op *select_op, data_size_t size, UINT flags,
+                            timeout_t abs_timeout, struct context_data *context, struct user_apc *user_apc )
+{
+#if defined(__SWITCH__) && defined(__aarch64__)
+    CONTEXT native, original;
+    struct context_data snapshots[2];
+    volatile unsigned int status = STATUS_UNSUCCESSFUL;
+
+    if (!context && get_thread_data()->teb)
+    {
+        /* A wait can become suspended after entering the server. Supply a
+         * real safe-point snapshot before that race, including the WOW64
+         * CPU area. Otherwise the server parks a thread with zero contexts. */
+        memset( &native, 0, sizeof(native) );
+        if (horizon_capture_context( &native )) return status;
+        original = native;
+        horizon_wait_context_to_server( snapshots, &native );
+        status = server_select_context( select_op, size, flags, abs_timeout, snapshots, user_apc );
+        horizon_wait_context_from_server( &native, snapshots );
+        /* Guest changes are written back to the CPU area by the converter.
+         * Native register changes require an actual context continuation. */
+        if (memcmp( &native, &original, sizeof(native) )) status = signal_set_full_context( &native );
+        return status;
+    }
+#endif
+    return server_select_context( select_op, size, flags, abs_timeout, context, user_apc );
 }
 
 
