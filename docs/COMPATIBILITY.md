@@ -12,6 +12,18 @@ Evidence is taken from the project's recorded checks, not new tests performed wh
 
 These are limited observations, not a list of fully playable games.
 
+## Games known not to run
+
+Games that were examined and do not run, with the reason. This list grows from bug reports: if a game fails for you, open an [issue](https://github.com/plv890/CorkDeck/issues) with its log (see the steps in [Installation](INSTALL.md), Developer mode) and it is looked into and added here.
+
+| Game | Result | Reason | Can it be fixed in CorkDeck |
+| --- | --- | --- | --- |
+| Mirror's Edge (Steam) | Stops with "Application load error" before the game starts | The program is wrapped in Steam's own copy protection. Before starting the game the wrapper checks that the Steam client library it talks to carries Valve's digital signature. CorkDeck runs games without the Steam client and cannot provide a library signed by Valve | No. The same applies to other games whose Steam wrapper makes this check |
+| Call of Duty: Black Ops (Steam) | Exits without showing a frame | Steam protects it with Custom Executable Generation: the files Steam serves contain a placeholder program, and the real one is built for each owner by Valve's servers and delivered only through the Steam client, which runs Valve's own code on the machine first | No. The same applies to other games that use this protection |
+| 3DMark (Steam) | Does not start | Needs the Steam client and a separately installed system-information service; Windows installers do not work in this environment | Not planned |
+
+These are limits of running a game without the Steam client, not faults of a particular console or installation. CorkDeck does not remove or bypass copy protection.
+
 - The underlying cause of SD session closures remains unresolved. Recovery is implemented, but covers may remain missing for that session. Recovery during gameplay is unverified.
 - The restart/cancel download dialog was exercised on a console with a download made to fail twice.
 - Some screens retain English text or the earlier layout.
