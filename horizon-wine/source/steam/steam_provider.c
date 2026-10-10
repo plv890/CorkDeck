@@ -274,6 +274,15 @@ authenticated:
           if (!steam_backend_app(&backend, inspect_app, &app)) {
             view.state = 3;
             view.error = backend.error;
+          } else if (app.windows && app.language_missing && app.english_available &&
+                     /* What the installer will do (steam_install_run): a game
+                      * with no files in the chosen language is installed in
+                      * English, so that is what the page describes. */
+                     (snprintf(backend.language, sizeof(backend.language), "english"),
+                      view.english_fallback = 1,
+                      !steam_backend_app(&backend, inspect_app, &app))) {
+            view.state = 3;
+            view.error = backend.error;
           } else {
             view.windows = app.windows;
             strcpy(view.installscript,app.installscript);
@@ -708,6 +717,46 @@ int steam_provider_uninstall(struct steam_provider *p, uint32_t app) {
   }
   SDL_UnlockMutex(p->mutex);
   return ok;
+}
+/* The shell removed the game's files itself: the library stops listing it as
+ * installed, and what is remembered of its download goes. Returns 0 while the
+ * provider is itself working on that game. */
+int steam_provider_forget_install(struct steam_provider *p, uint32_t app) {
+  size_t i;
+  int ok;
+  SDL_LockMutex(p->mutex);
+  ok = !p->remove_view.busy && p->install_app != app &&
+       !(p->download.app_id == app && steam_download_active(p->download.state));
+  if (ok) {
+    for (i = 0; i < p->library.count; ++i)
+      if (p->library.games[i].app_id == app)
+        p->library.games[i].installed = 0;
+    p->library_view.generation++;
+    if (p->download.app_id == app)
+      memset(&p->download, 0, sizeof(p->download));
+  }
+  SDL_UnlockMutex(p->mutex);
+  return ok;
+}
+/* The shell found an installation the library did not know of. */
+void steam_provider_note_install(struct steam_provider *p, uint32_t app) {
+  size_t i;
+  SDL_LockMutex(p->mutex);
+  for (i = 0; i < p->library.count; ++i)
+    if (p->library.games[i].app_id == app && !p->library.games[i].installed) {
+      p->library.games[i].installed = 1;
+      p->library_view.generation++;
+    }
+  SDL_UnlockMutex(p->mutex);
+}
+/* Whether the provider is downloading, installing or removing right now. */
+int steam_provider_busy(struct steam_provider *p, uint32_t app) {
+  int busy;
+  SDL_LockMutex(p->mutex);
+  busy = p->remove_view.busy || (app && p->install_app == app) ||
+         (p->download.app_id == app && steam_download_active(p->download.state));
+  SDL_UnlockMutex(p->mutex);
+  return busy;
 }
 void steam_provider_remove_status(struct steam_provider *p,
                                   struct steam_remove_view *out) {

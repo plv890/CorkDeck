@@ -39,6 +39,12 @@ int steam_provider_refresh_library(struct steam_provider *p){(void)p;return 1;}
 int steam_provider_install_language(struct steam_provider *p,uint32_t a,const char *lang){(void)p;assert(a==123);assert(lang);++install_calls;snprintf(installed_language,sizeof(installed_language),"%s",lang);return 1;}
 int steam_provider_install(struct steam_provider *p,uint32_t a){(void)p;(void)a;return 1;}
 void steam_provider_cancel_download(struct steam_provider *p){(void)p;}
+/* Nothing is being started over, removed or noted in these pictures. */
+int steam_provider_restart_download(struct steam_provider *p){(void)p;return 0;}
+int steam_provider_restart_poll(struct steam_provider *p){(void)p;return 0;}
+int steam_provider_busy(struct steam_provider *p,uint32_t app){(void)p;(void)app;return 0;}
+int steam_provider_forget_install(struct steam_provider *p,uint32_t app){(void)p;(void)app;return 1;}
+void steam_provider_note_install(struct steam_provider *p,uint32_t app){(void)p;(void)app;}
 void steam_provider_download_status(struct steam_provider *p,struct steam_download_view *v){(void)p;*v=(struct steam_download_view){.state=mode==12?STEAM_DOWNLOAD_CLEANING:mode==13?STEAM_DOWNLOAD_DISCARDED:(mode==14||mode==19||mode==20)?STEAM_DOWNLOAD_ERROR:mode==4?STEAM_DOWNLOAD_FILES:mode==10?STEAM_DOWNLOAD_COMPLETE:STEAM_DOWNLOAD_IDLE,.app_id=123,.downloaded=60u*1048576,.total=100u*1048576,.network_bytes=20u*1048576,.bytes_per_second=2.5*1048576,.elapsed_ms=15000,.network_ms=8000,.batch_files=mode==4?64:0,.batch_peak_files=mode==4?3:0,.requests=24,.connections=2,.parallelism=2,.peak_requests=2};if(mode==12||mode==13)v->bytes_per_second=0;
  if(mode==13)v->downloaded=v->total=0;
  if(mode==14){v->error=3112;v->cleanup_errno=5;}
@@ -139,7 +145,9 @@ int main(int argc,char **argv)
         f=fopen(path,"wb");assert(f&&fwrite(jpeg,1,size,f)==size&&!fclose(f));free(jpeg);
       }
     }
-    if(mode>=15 && mode<=17){char lang[32]="unchanged";int selected=steam_ui_install_language_picker(&ui,steam_language_mask("russian")|STEAM_LANGUAGE_BASE,lang);
+    if(mode>=15 && mode<=17){char lang[32]="unchanged";
+        /* The files common to every language are offered only to a game that has no language files (mode 16). */
+        int selected=steam_ui_install_language_picker(&ui,mode==16?STEAM_LANGUAGE_BASE:steam_language_mask("russian")|STEAM_LANGUAGE_BASE,lang);
         if(mode==17)assert(!selected&&!lang[0]);
         else assert(selected&&!strcmp(lang,mode==16?STEAM_LANGUAGE_BASE_ID:"russian"));}
     else if(mode==21){
@@ -150,7 +158,8 @@ int main(int argc,char **argv)
       assert(!steam_prerequisites_ui(&ui,argv[4],123,NULL,&a));
     }
     else if(mode==7){assert(steam_ui_language_picker(&ui,"english")==30);}
-    else if(mode==5||mode==10||mode==11)steam_ui_settings(&ui,argc==5?argv[4]:"/tmp");
+    /* Export and the LAN view are there in developer mode only. */
+    else if(mode==5||mode==10||mode==11){steam_ui_set_developer(mode!=5);steam_ui_settings(&ui,argc==5?argv[4]:"/tmp");}
     else if(mode==6)steam_ui_open(&ui,argc==5?argv[4]:"/tmp");
     else if(mode>=2){struct steam_launcher_adapter adapter={0};SDL_Event event={.type=SDL_KEYDOWN};event.key.keysym.sym=SDLK_r;
         if(mode==8||mode==18){event.key.keysym.sym=SDLK_RETURN;SDL_PushEvent(&event);}
@@ -161,7 +170,7 @@ int main(int argc,char **argv)
     if(mode==10){char path[768],text[2048];FILE *f;size_t n;
         assert(argc==5);snprintf(path,sizeof(path),"%s/logs/steam-report.log",argv[4]);
         f=fopen(path,"rb");assert(f);n=fread(text,1,sizeof(text)-1,f);assert(!fclose(f));text[n]=0;
-        assert(strstr(text,"steam_report_v1 build=2026100608"));
+        {char stamp[64];snprintf(stamp,sizeof(stamp),"steam_report_v1 build=%u ",STEAM_DIAGNOSTIC_BUILD);assert(strstr(text,stamp));}
         assert(strstr(text,"download_snapshot available=1 appid=123"));
         assert(!strstr(text,"76561198000000000")&&!strstr(text,"data/example.dat"));
         puts("Steam settings Export diagnostics button saves a checked report without SteamID or paths");}

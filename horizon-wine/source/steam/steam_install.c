@@ -1101,12 +1101,11 @@ done:
   run_metrics(r);
   return ok;
 }
-/* While an installation runs nothing else needs the console: take the fastest
- * processor setting the system offers an application, and do not let it fall
- * asleep in the middle. */
+/* While an installation runs the console is not let fall asleep in the middle.
+ * The clocks are left alone: the system's boost mode is a clock setting like
+ * any other, and the clocks are the owner's (tests/check_no_clock_control.py). */
 static void console_for_download(int on) {
 #ifdef __SWITCH__
-  appletSetCpuBoostMode(on ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
   appletSetAutoSleepDisabled(on != 0);
   if (on && R_FAILED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 15)))
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 7);
@@ -1442,6 +1441,9 @@ int steam_install_run(struct steam_backend *backend, const char *root,
               appid, (unsigned long long)backend->account) < 0)
     goto io_error;
   if (fprintf(file, "language=%s\n", backend->language[0] ? backend->language : "english") < 0)
+    goto io_error;
+  /* What the files take, for the Storage page: it is not counted again. */
+  if (fprintf(file, "size=%llu\n", (unsigned long long)v.total) < 0)
     goto io_error;
   if ((launch_exe_found || exe_count == 1) &&
       fprintf(file, "executable=%s\n",

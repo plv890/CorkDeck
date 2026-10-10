@@ -50,6 +50,7 @@ struct horizon_server_object {
     char *file_name, *dir_mask, *name;
 };
 static struct horizon_server_object *horizon_server_threads;
+static struct horizon_server_object *horizon_primary_token;
 static unsigned horizon_server_running_threads;
 static struct { unsigned thread_objects; } horizon_lifecycle;
 static int horizon_registry;

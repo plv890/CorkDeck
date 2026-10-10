@@ -772,12 +772,22 @@ static int wrap_text( struct ui *ui, TTF_Font *font, int x, int y, int max_width
     {
         const char *newline = strchr( text, '\n' );
         size_t len = newline ? (size_t)(newline - text) : strlen( text ), bytes;
+        int longer = 0;
 
-        if (len >= sizeof(line)) len = sizeof(line) - 1;
+        /* A paragraph longer than the buffer is taken a bufferful at a time,
+         * each ending at a whole character and broken at a space like any
+         * other line: Russian is two bytes a letter and reaches the end of
+         * the buffer in half the letters. */
+        if (len >= sizeof(line))
+        {
+            len = sizeof(line) - 1;
+            while (len && (text[len] & 0xc0) == 0x80) len--;
+            longer = 1;
+        }
         memcpy( line, text, len );
         line[len] = 0;
         bytes = fitting_bytes( font, line, max_width );
-        if (bytes < len && lines + 1 < max_lines)
+        if ((bytes < len || longer) && lines + 1 < max_lines)
         {
             size_t space = bytes;
 

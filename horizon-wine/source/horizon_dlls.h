@@ -23,7 +23,14 @@
 #include <stddef.h>
 
 #define HORIZON_DLLS_RAW "https://raw.githubusercontent.com/autorunhq/autorun-horizon-dlls/"
-#define HORIZON_DLLS_MANIFEST_URL HORIZON_DLLS_RAW "main/switch/wine/horizon-dlls/manifest.json"
+/* The set this build was tested with. The repository is another project's and
+ * its main branch moves on with that project's runtime: a set taken from there
+ * on the day of installation would be one nobody has run with this build, and
+ * would leave out the files that need a runtime this one is not. The manifest
+ * is the one of this commit, and so is every file it names. */
+#define HORIZON_DLLS_REVISION "5d6eccb82c266f037dd4305037c986b6303cd59a"
+#define HORIZON_DLLS_MOVING HORIZON_DLLS_RAW "main/"
+#define HORIZON_DLLS_MANIFEST_URL HORIZON_DLLS_RAW HORIZON_DLLS_REVISION "/switch/wine/horizon-dlls/manifest.json"
 /* Relative to the runtime directory, as in the repository under switch/wine. */
 #define HORIZON_DLLS_MANIFEST "horizon-dlls/manifest.json"
 #define HORIZON_DLLS_CLASSES  "horizon-dlls/classes.reg"
@@ -174,11 +181,13 @@ enum horizon_dlls_result horizon_dlls_apply( const char *root, const struct hori
         const struct horizon_dll_manifest *local, const struct horizon_dlls_transport *transports,
         unsigned int connections, horizon_dlls_progress progress, void *opaque );
 
-/* The repository's latest release: every file as one tar compressed with zstd
+/* The repository's release: every file as one tar compressed with zstd
  * (-19, long range), about 90 MB where the files one by one are twice that, for
  * a card that has little of the set; and as a zip, for a player without a
  * network. */
-#define HORIZON_DLLS_RELEASE "https://github.com/autorunhq/autorun-horizon-dlls/releases/latest/download/"
+/* It is a start, not the set: a file of it that the manifest has another
+ * version of is downloaded on its own afterwards. */
+#define HORIZON_DLLS_RELEASE "https://github.com/autorunhq/autorun-horizon-dlls/releases/download/dlls/"
 #define HORIZON_DLLS_BUNDLE_URL HORIZON_DLLS_RELEASE "horizon-dlls.tar.zst"
 
 /* How downloading and unpacking the bundle went, for the log. */

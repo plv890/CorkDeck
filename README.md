@@ -30,7 +30,7 @@ Fallout 3 (Steam version) at its main menu on a Nintendo Switch, started from Co
 
 ## Download and install
 
-1. Download **`CorkDeck-0.2.zip`** from [Releases](https://github.com/plv890/CorkDeck/releases/latest). The "Source code" archives on that page are for developers; the installable package is the ZIP named CorkDeck.
+1. Download **`CorkDeck-0.3.zip`** from [Releases](https://github.com/plv890/CorkDeck/releases/latest). The "Source code" archives on that page are for developers; the installable package is the ZIP named CorkDeck.
 2. Extract it and copy the `switch` folder to the root of the SD card.
 3. Open the Homebrew Menu over a game (hold **R** while starting one), start `wine-nx-runtime` and follow First set-up. It adds a CorkDeck entry to the HOME menu and downloads the Windows components.
 
@@ -42,15 +42,15 @@ The full guide, including moving over from Autorun and updating from an earlier 
 - An SD card: about 60 MB for CorkDeck, about 1 GB for the Windows components it downloads, plus room for games.
 - Wi-Fi for the first set-up and for Steam.
 - Your own games. None are included.
-- Optional: [Horizon OC](https://github.com/Horizon-OC/Horizon-OC) for per-game clock profiles.
+- Optional: [Horizon OC](https://github.com/Horizon-OC/Horizon-OC), if you overclock. CorkDeck itself never changes clocks.
 
 ## What it does
 
 - **Library.** Add any Windows `.exe` from the SD card, or install games from your Steam account.
 - **Steam on the Switch.** Sign in with a QR code or password, browse the games you own, download and install them on the console.
 - **Per-game settings** for the translator, the renderer, threads and memory.
-- **Per-game clock profiles** through Horizon OC.
-- **Diagnostics.** An FPS and frame-time display, and a report for every launch.
+- **Missing libraries found before a game starts**, and Microsoft Visual C++ 2015-2022 added automatically.
+- **Diagnostics.** An FPS and frame-time display, a report for every launch, and a developer mode that is off by default.
 
 ## What CorkDeck adds to Autorun
 
@@ -80,7 +80,11 @@ CorkDeck keeps Autorun's runtime, the part that actually executes Windows code, 
 **Running games**
 
 - Pressing Play downloads missing Windows components by itself.
-- Per-game clock profiles through Horizon OC (economy, balanced, performance, extreme), never above what Horizon OC allows, and restored afterwards. Voltages are not touched.
+- Before a program starts, CorkDeck reads which libraries it imports and names the ones that are missing. The Microsoft Visual C++ 2015-2022 runtime is downloaded from Microsoft and added by itself.
+- A local Steamworks library inside the application, laid out the way games built with Visual C++ call it, with every interface family present.
+- Windows picture decoders (PNG, JPEG and others) are registered, so games that load images through Direct3D helpers find them.
+- CorkDeck does not change the console's clocks or voltages. Overclocking stays in Horizon OC, where you set it.
+- A game can be deleted from the SD card from its page, and Storage shows what each game takes.
 - A global switch for the FPS and frame-time display.
 - If the system closes the application's access to the SD card, CorkDeck reconnects without a restart.
 
@@ -92,7 +96,7 @@ CorkDeck keeps Autorun's runtime, the part that actually executes Windows code, 
 
 **Removed:** the application no longer updates itself over the network. A new version is installed by replacing one file.
 
-CorkDeck is not a drop-in replacement: both projects use the `switch/wine` folder, so install one or the other. See [FORK.md](FORK.md) for the fork point and [docs/RELEASE-0.2.md](docs/RELEASE-0.2.md) for this version's changes.
+CorkDeck is not a drop-in replacement: both projects use the `switch/wine` folder, so install one or the other. See [FORK.md](FORK.md) for the fork point and [docs/RELEASE-0.3.md](docs/RELEASE-0.3.md) for this version's changes (0.2: [RELEASE-0.2](docs/RELEASE-0.2.md)).
 
 If something is broken in CorkDeck, please report it [here](https://github.com/plv890/CorkDeck/issues) and not to the Autorun project. They did not write the parts CorkDeck changed.
 
@@ -121,7 +125,7 @@ CorkDeck is made by **Maj0ra'sMask** ([@plv890](https://github.com/plv890) on Gi
 
 ## Building from source
 
-See [BUILDING.md](BUILDING.md). The inputs of the 0.2 package that are not part of the main tree, such as the sources of the local Steamworks library and the Mesa changes, are in [release-support](release-support). Working notes from development are in [docs/research](docs/research).
+See [BUILDING.md](BUILDING.md). The scripts and inputs of the package that are not part of the main tree, such as the build and test runners and the Mesa changes, are in [release-support](release-support); the local Steamworks library is built from `horizon-wine/assets/steamworks/source`. Working notes from development are in [docs/research](docs/research).
 
 ## Contributing
 

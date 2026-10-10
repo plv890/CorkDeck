@@ -12,13 +12,22 @@
 
 static const char *font_path;
 static void *font_data;
+static long font_size;
 
+/* Read once and kept, as the console's own font is: the keyboard asks again
+ * for every size it draws. */
 int wine_nx_osk_font( const void **data, size_t *size )
 {
-    FILE *file = fopen( font_path, "rb" );
+    FILE *file;
     long length;
 
-    if (!file) return 0;
+    if (font_data)
+    {
+        *data = font_data;
+        *size = font_size;
+        return 1;
+    }
+    if (!(file = fopen( font_path, "rb" ))) return 0;
     fseek( file, 0, SEEK_END );
     length = ftell( file );
     fseek( file, 0, SEEK_SET );
@@ -26,7 +35,7 @@ int wine_nx_osk_font( const void **data, size_t *size )
     if (fread( font_data, 1, length, file ) != (size_t)length) length = 0;
     fclose( file );
     *data = font_data;
-    *size = length;
+    *size = font_size = length;
     return length > 0;
 }
 

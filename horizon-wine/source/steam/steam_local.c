@@ -13,12 +13,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const struct { const char *name,*hash,*previous_hashes[5]; size_t size; unsigned machine; } payloads[] = {
-    {"steam_api.dll","6c07b437415e6a36ef28a0b5a0b738469071b527a848e6fd9ae852d92daa0436",{"8de20d1249db83aca4236ce9b1ee685e7507b50d8f5b934125bd07e3039cd648","e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe","d9aec7f1d5452d142ba1a6eb9ffa709f2e53caa93c0e8ede5ecc562d7a24f9f7","8e9087f2156aa7397e70b12cf87204123e72b4d18448e77e06dacaa3d7b49331","bc87cd5f712fc8d65ff06e69ac26ce450aec6daa435f2894934fbc5630bad155"},474624,0x14c},
-    {"steam_api64.dll","e1c6aff3f88086fda769fe074b514f3ce8e01aa027515fda62d16739cd5a6fb7",{"dc061d912d5ce3933793002a2cd2e2391329768a3887eda724756f9e22a442e0","0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623","fa96bd051b9c74ebb753f786309dbbfb3a9e7c9236ad430bbc8869eb3f1e7010","d7bbb6abee6796742267cff9ed515b548864347e3700c60f8c337082c526c02e","a246cee2c9119ff901ed195e421470cdf3f14fc277ebc506aca8754444be8d6f"},450048,0x8664}
+static const struct { const char *name,*hash,*previous_hashes[7]; size_t size; unsigned machine; } payloads[] = {
+    {"steam_api.dll","916e26cb3786d2a3f74b36ae31f6e5997ae227fa6120e33b5f57c1cf3e95326c",{"9f142b8b5d915026907231635f3e9495fdbbcad139df967ac67ac0f1de1dbbb6","6c07b437415e6a36ef28a0b5a0b738469071b527a848e6fd9ae852d92daa0436","8de20d1249db83aca4236ce9b1ee685e7507b50d8f5b934125bd07e3039cd648","e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe","d9aec7f1d5452d142ba1a6eb9ffa709f2e53caa93c0e8ede5ecc562d7a24f9f7","8e9087f2156aa7397e70b12cf87204123e72b4d18448e77e06dacaa3d7b49331","bc87cd5f712fc8d65ff06e69ac26ce450aec6daa435f2894934fbc5630bad155"},586752,0x14c},
+    {"steam_api64.dll","667ff936d43d858d8690f0192dd8583be1a02b7fae152efa612f796e2db12ef7",{"02b2f2c7ac99b2ef2cbc6601882f43faefeb2812dd02b0004c5dc4ec5fb56197","e1c6aff3f88086fda769fe074b514f3ce8e01aa027515fda62d16739cd5a6fb7","dc061d912d5ce3933793002a2cd2e2391329768a3887eda724756f9e22a442e0","0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623","fa96bd051b9c74ebb753f786309dbbfb3a9e7c9236ad430bbc8869eb3f1e7010","d7bbb6abee6796742267cff9ed515b548864347e3700c60f8c337082c526c02e","a246cee2c9119ff901ed195e421470cdf3f14fc277ebc506aca8754444be8d6f"},585216,0x8664}
 };
 static int previous_payload(unsigned index,const char *hash) {
-    for(unsigned i=0;i<5;++i)if(!strcmp(hash,payloads[index].previous_hashes[i]))return 1;
+    for(unsigned i=0;i<7;++i)if(!strcmp(hash,payloads[index].previous_hashes[i]))return 1;
     return 0;
 }
 static int join(char out[1024],const char *base,const char *leaf) {
@@ -62,12 +62,36 @@ static unsigned machine(const unsigned char *data,size_t size) {
     if(pe>size-6||memcmp(data+pe,"PE\0\0",4))return 0;
     return data[pe+4]|(unsigned)data[pe+5]<<8;
 }
+/* The local Steam library is carried inside the application (assets/steamworks,
+ * built from assets/steamworks/source) and is put on the card when the one
+ * there is not this build's: nobody has to copy it beside the application.
+ * Weak: the host tests are built without it. */
+extern const unsigned char corkdeck_steam_api[] __attribute__((weak));
+extern const size_t corkdeck_steam_api_size __attribute__((weak));
+extern const unsigned char corkdeck_steam_api64[] __attribute__((weak));
+extern const size_t corkdeck_steam_api64_size __attribute__((weak));
+static int carried(const char *folder,const char *payload,unsigned index) {
+    const unsigned char *data=index?corkdeck_steam_api64:corkdeck_steam_api;
+    const size_t *size=index?&corkdeck_steam_api64_size:&corkdeck_steam_api_size;
+    char temporary[1100];FILE *out;int ok;
+    if(!data||!size||*size!=payloads[index].size)return 0;
+    if(mkdir(folder,0777)&&errno!=EEXIST)return 0;
+    snprintf(temporary,sizeof(temporary),"%s.corkdeck-part",payload);
+    if(kind(temporary)<0||!(out=fopen(temporary,"wb")))return 0;
+    ok=fwrite(data,1,*size,out)==*size&&!fflush(out)&&!fsync(fileno(out));
+    if(fclose(out))ok=0;
+    if(!ok||!steam_file_replace(temporary,payload)){unlink(temporary);return 0;}
+    return matches(payload,index);
+}
 static int config(const char *source,const char *destination,uint32_t app,uint64_t account,unsigned index,const char *language) {
     static const struct{const char *key,*prefix;} versions[]={
         {"user","SteamUser"},{"apps","STEAMAPPS_INTERFACE_VERSION"},{"utils","SteamUtils"},
         {"friends","SteamFriends"},{"client","SteamClient"},{"userstats","STEAMUSERSTATS_INTERFACE_VERSION"},
         {"remotestorage","STEAMREMOTESTORAGE_INTERFACE_VERSION"},{"screenshots","STEAMSCREENSHOTS_INTERFACE_VERSION"},{"matchmaking","SteamMatchMaking"},
-        {"matchmakingservers","SteamMatchMakingServers"},{"networking","SteamNetworking"},{"gameserver","SteamGameServer"}
+        {"matchmakingservers","SteamMatchMakingServers"},{"networking","SteamNetworking"},{"gameserver","SteamGameServer"},
+        /* Families the local library only answers "no" in: the version the game was built for
+         * still decides how many functions the table has and what each takes. */
+        {"ugc","STEAMUGC_INTERFACE_VERSION"},{"http","STEAMHTTP_INTERFACE_VERSION"},{"controller","SteamController"},{"inventory","STEAMINVENTORY_INTERFACE_V"},{"music","STEAMMUSIC_INTERFACE_VERSION"},{"musicremote","STEAMMUSICREMOTE_INTERFACE_VERSION"},{"video","STEAMVIDEO_INTERFACE_V"},{"applist","STEAMAPPLIST_INTERFACE_VERSION"},{"htmlsurface","STEAMHTMLSURFACE_INTERFACE_VERSION_"},{"unifiedmessages","STEAMUNIFIEDMESSAGES_INTERFACE_VERSION"},{"gameserverstats","SteamGameServerStats"},{"parentalsettings","STEAMPARENTALSETTINGS_INTERFACE_VERSION"},{"remoteplay","STEAMREMOTEPLAY_INTERFACE_VERSION"}
     };
     struct stat s;unsigned char *data=NULL;FILE *f=NULL,*out=NULL;char temp[1100];int ok=0;
     if(!regular(source)||lstat(source,&s)||s.st_size<64||s.st_size>4*1024*1024)return 0;
@@ -127,7 +151,8 @@ int steam_local_prepare(const char *root,const char *executable,unsigned executa
         if(lstat(target,&s)){if(lstat(backup,&s))continue;if(!regular(backup)||rename(backup,target))return STEAM_LOCAL_CONFLICT;}
         if(!regular(target))return STEAM_LOCAL_CONFLICT;
         ++found;
-        if(!join(source,root,"steamworks-local")||!join(payload,source,payloads[index].name)||!matches(payload,index))return STEAM_LOCAL_PAYLOAD_MISSING;
+        if(!join(source,root,"steamworks-local")||!join(payload,source,payloads[index].name)||
+           (!matches(payload,index)&&!carried(source,payload,index)))return STEAM_LOCAL_PAYLOAD_MISSING;
         if(!join(settings,directory,"autorun-steam.ini"))return STEAM_LOCAL_CONFLICT;
         if(kind(settings)<0)return STEAM_LOCAL_CONFLICT;
         if(regular(backup)){

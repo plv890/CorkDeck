@@ -102,6 +102,17 @@ static int official_url( const char *url, const char *folder, const char *name )
     return tail_length < sizeof(tail) && length > tail_length && !strcmp( url + length - tail_length, tail );
 }
 
+/* Where a file is fetched from: the manifest names it on the main branch, and
+ * it is taken from the commit the manifest is of (HORIZON_DLLS_REVISION). */
+static const char *revision_url( const char *url, char *buffer, size_t size )
+{
+    const size_t moving = sizeof(HORIZON_DLLS_MOVING) - 1;
+
+    if (strncmp( url, HORIZON_DLLS_MOVING, moving )) return url;
+    if ((size_t)snprintf( buffer, size, HORIZON_DLLS_RAW HORIZON_DLLS_REVISION "/%s", url + moving ) >= size) return url;
+    return buffer;
+}
+
 /* The compressed copy's URL, for the file it says it is. */
 static int official_packed_url( const char *url, const char *folder, const char *name )
 {
@@ -789,7 +800,7 @@ static void pause_before( unsigned int attempt )
 static enum horizon_dlls_result download_file( const char *root, const struct horizon_dll_file *f,
         const struct horizon_dlls_transport *transport, horizon_dlls_progress progress, void *opaque )
 {
-    char path[768], digest[65];
+    char path[768], digest[65], pinned[320];
     unsigned char hash[32], *data;
     struct download d;
     enum horizon_dlls_result result = HORIZON_DLLS_NETWORK;
@@ -817,7 +828,8 @@ static enum horizon_dlls_result download_file( const char *root, const struct ho
         }
         hash_begin( &d.hash );
         if (d.packed) hash_begin( &d.packed_hash );
-        result = transport->fetch( transport->opaque, d.packed ? f->packed_url : f->url, to_file, &d, progress, opaque );
+        result = transport->fetch( transport->opaque, revision_url( d.packed ? f->packed_url : f->url, pinned, sizeof(pinned) ),
+                                   to_file, &d, progress, opaque );
         if (d.packed) inflateEnd( &d.stream );
         free( d.out );
         if (result != HORIZON_DLLS_NETWORK) break;

@@ -8,8 +8,12 @@ import argparse
 import pathlib
 import re
 
+# The last line: families this library has nothing to say in. Every function of theirs
+# answers "no" or nothing, but it is there to be called: a game that imports SteamUGC
+# and found no such function was stopped by the loader's own stub the moment it asked.
 FAMILIES = ('user', 'apps', 'utils', 'friends', 'userstats', 'remotestorage', 'client', 'input',
-            'matchmaking', 'matchmakingservers', 'networking', 'gameserver', 'screenshots')
+            'matchmaking', 'matchmakingservers', 'networking', 'gameserver', 'screenshots',
+            'ugc', 'http', 'controller', 'inventory', 'music', 'musicremote', 'video', 'applist', 'htmlsurface', 'unifiedmessages', 'gameserverstats', 'parentalsettings', 'remoteplay')
 
 def methods(text):
     text = re.sub(r'/\*.*?\*/|//[^\n]*', '', text, flags=re.S)
@@ -88,8 +92,51 @@ def body(family, ret, name, args):
         if name == 'IsScreenshotsHooked': return 'Guard guard; return screenshots_hooked;'
     return default
 
+# A game built with Visual C++ calls these interfaces by Visual C++'s rules, and this
+# library is built with a compiler that follows GCC's. They differ in two places.
+#
+# A member function that returns a small class by value (a CSteamID is eight bytes)
+# is, for Visual C++, given the address to write it to as a hidden first argument
+# and returns that address; GCC's rules return the value itself in registers. A game
+# asking "who is the user" then took the account's number for an address and read
+# from it: Age of Empires II HD stopped with an access violation five seconds in.
+#
+# Functions of one name declared one after another are, for Visual C++, in the table
+# in the reverse of the order they are declared in.
+#
+# So each interface gets a table of its own, laid out as Visual C++ would, and each
+# function returning such a class gets a small function in front of it that takes
+# and returns the hidden address.
+SMALL_CLASSES = ('CSteamID', 'CGameID', 'InputDigitalActionData_t')
+
+def msvc_order(found):
+    order, seen = [], set()
+    for i, method in enumerate(found):
+        name = method[1]
+        if name in seen: continue
+        seen.add(name)
+        order += reversed([j for j, other in enumerate(found) if other[1] == name])
+    return order
+
+def abi_table(base, cls, found):
+    lines, slots = [], []
+    for i, (ret, name, params, args, const) in enumerate(found):
+        if ret in SMALL_CLASSES:
+            thunk = 'abi_%s_%d' % (base, i)
+            lines.append('static %s *ABI_THISCALL %s(%s *self, %s *result%s) { *result = self->%s::%s(%s); return result; }' % (
+                ret, thunk, cls, ret, (', ' + params) if params.strip() else '', cls, name, ', '.join(args)))
+            slots.append('(void *)' + thunk)
+        else:
+            slots.append('original[%d]' % i)
+    lines.append('static void *abi_table_%s[%d];' % (base, len(found)))
+    lines.append('static void abi_fix_%s() { void **original = *(void ***)&instance_%s;' % (base, base))
+    for slot, i in enumerate(msvc_order(found)):
+        lines.append('  abi_table_%s[%d] = %s;' % (base, slot, slots[i]))
+    lines.append('  *(void ***)&instance_%s = abi_table_%s; }' % (base, base))
+    return lines
+
 def generate(source, output, preprocessed=None):
-    includes, classes, lookups = [], [], []
+    includes, classes, lookups, fixes = [], [], [], []
     totals = 0
     for family in FAMILIES:
         paths = sorted((source / 'sdk/steam').glob('isteam' + family + '*.h'))
@@ -98,7 +145,8 @@ def generate(source, output, preprocessed=None):
         for p in paths:
             text = p.read_text(errors='replace')
             camel = {'userstats':'UserStats','remotestorage':'RemoteStorage','gameserver':'GameServer',
-                     'matchmaking':'Matchmaking','matchmakingservers':'MatchmakingServers'}.get(family,family.title())
+                     'matchmaking':'Matchmaking','matchmakingservers':'MatchmakingServers',
+                     'ugc':'UGC','http':'HTTP','controller':'Controller','inventory':'Inventory','music':'Music','musicremote':'MusicRemote','video':'Video','applist':'AppList','htmlsurface':'HTMLSurface','unifiedmessages':'UnifiedMessages','gameserverstats':'GameServerStats','parentalsettings':'ParentalSettings','remoteplay':'RemotePlay'}.get(family,family.title())
             suffix = re.search(r'(\d+)\.h$', p.name)
             if suffix and int(suffix.group(1)) < {'user':8,'client':7,'friends':4}.get(family,1):
                 continue
@@ -115,20 +163,25 @@ def generate(source, output, preprocessed=None):
                           'matchmaking':'SteamMatchMaking','matchmakingservers':'SteamMatchMakingServers',
                           'remotestorage':'STEAMREMOTESTORAGE_INTERFACE_VERSION',
                           'userstats':'STEAMUSERSTATS_INTERFACE_VERSION',
-                          'screenshots':'STEAMSCREENSHOTS_INTERFACE_VERSION'}.get(family, 'Steam'+family.title())
+                          'screenshots':'STEAMSCREENSHOTS_INTERFACE_VERSION',
+                          'ugc':'STEAMUGC_INTERFACE_VERSION','http':'STEAMHTTP_INTERFACE_VERSION','controller':'SteamController','inventory':'STEAMINVENTORY_INTERFACE_V','music':'STEAMMUSIC_INTERFACE_VERSION','musicremote':'STEAMMUSICREMOTE_INTERFACE_VERSION','video':'STEAMVIDEO_INTERFACE_V','applist':'STEAMAPPLIST_INTERFACE_VERSION','htmlsurface':'STEAMHTMLSURFACE_INTERFACE_VERSION_','unifiedmessages':'STEAMUNIFIEDMESSAGES_INTERFACE_VERSION','gameserverstats':'SteamGameServerStats','parentalsettings':'STEAMPARENTALSETTINGS_INTERFACE_VERSION','remoteplay':'STEAMREMOTEPLAY_INTERFACE_VERSION'}.get(family, 'Steam'+family.title())
                 version_name = prefix + suffix.group(1)
             else: version_name = version.group(1)
             includes.append('#include "steam/' + p.name + '"')
             cls = 'Local_' + base
             lines = ['struct '+cls+' final : '+base+' {']
             class_text = effective[match.end():effective.index('};',match.end())]
-            for ret, name, params, args, const in methods(class_text):
+            found = list(methods(class_text))
+            for ret, name, params, args, const in found:
                 lines.append('  '+ret+' '+name+'('+params+')'+(' const' if const else '')+' override { '+body(family,ret,name,args)+' }')
                 totals += 1
             lines += ['};', 'static '+cls+' instance_'+base+';']
+            lines += abi_table(base, cls, found)
+            fixes.append('  abi_fix_'+base+'();')
             classes += lines
             lookups.append('if (!strcmp(version,"'+version_name+'")) return static_cast<'+base+'*>(&instance_'+base+');')
     output.mkdir(parents=True, exist_ok=True)
+    classes += ['static void abi_fix_all() {'] + fixes + ['}']
     (output/'interfaces.inc').write_text('\n'.join(classes)+'\n')
     (output/'interface_headers.inc').write_text('\n'.join(includes)+'\n')
     (output/'lookup.inc').write_text('\n'.join(lookups)+'\nreturn nullptr;\n')

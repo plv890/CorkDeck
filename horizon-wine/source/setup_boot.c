@@ -264,6 +264,11 @@ static int next_line(const struct buffer *text, size_t *position, struct line *l
     return 1;
 }
 
+int setup_boot_entry_ours(const char *name)
+{
+    return !strcasecmp(name, SETUP_BOOT_ENTRY_NAME) || !strcasecmp(name, SETUP_BOOT_OLD_ENTRY_NAME);
+}
+
 static int scan_entries(const struct buffer *ini, struct setup_boot_entry *entries,
                         size_t capacity, size_t *count)
 {
@@ -293,7 +298,7 @@ static int scan_entries(const struct buffer *ini, struct setup_boot_entry *entri
             strcpy(current->name, line.value);
             current->offset = line.start;
             memcpy(current->ini_sha256, hash, 32);
-            if (!strcasecmp(line.value, SETUP_BOOT_ENTRY_NAME)) strcpy(current->reason, "Autorun entry already exists");
+            if (setup_boot_entry_ours(line.value)) strcpy(current->reason, "CorkDeck entry already exists");
         }
         else if (current)
         {
@@ -301,7 +306,7 @@ static int scan_entries(const struct buffer *ini, struct setup_boot_entry *entri
             if (!strcmp(line.key, "payload") ||
                 (!strcmp(line.key, "l4t") && strcmp(line.value, "0")) ||
                 (!strcmp(line.key, "stock") && strcmp(line.value, "0")))
-                strcpy(current->reason, "Payload, stock OS and L4T entries cannot load the Autorun kernel");
+                strcpy(current->reason, "Payload, stock OS and L4T entries cannot load the CorkDeck kernel");
         }
     }
     if (current)
@@ -336,7 +341,7 @@ static int managed_entry(const struct buffer *ini, const struct setup_boot_entry
     size_t position = entry->offset, end = position + entry->length;
     int kernel = 0, loader = 0, hoc_loader = 0, package = 0;
     if (next_line(ini, &position, &line) != 1 || strcmp(line.key, "[") ||
-        strcasecmp(line.value, SETUP_BOOT_ENTRY_NAME)) return 0;
+        !setup_boot_entry_ours(line.value)) return 0;
     while (position < end)
     {
         if (next_line(ini, &position, &line) != 1) return 0;
@@ -607,7 +612,7 @@ int setup_boot_needs_update(const char *root, const struct setup_boot_manifest *
     if (!scan_entries(&ini, entries, SETUP_BOOT_MAX_ENTRIES, &count)) goto done;
     for (i = 0; i < count; i++)
     {
-        if (strcasecmp(entries[i].name, SETUP_BOOT_ENTRY_NAME)) continue;
+        if (!setup_boot_entry_ours(entries[i].name)) continue;
         if (managed >= 0 || !managed_entry(&ini, &entries[i])) goto done;
         managed = (int)i;
     }
@@ -624,7 +629,9 @@ int setup_boot_needs_update(const char *root, const struct setup_boot_manifest *
             strcpy(loader, line.value);
     }
     if (installed_loader) *installed_loader = !strcmp(loader, HOC_KIP) ? SETUP_BOOT_HOC : SETUP_BOOT_STOCK;
-    if (strcmp(kernel, MESOSPHERE) || !*loader ||
+    /* An entry under its old name is written again to be given the new one. */
+    if (strcmp(entries[managed].name, SETUP_BOOT_ENTRY_NAME)) result = 1;
+    else if (strcmp(kernel, MESOSPHERE) || !*loader ||
         !installed_payload_matches(root, kernel, &manifest->mesosphere))
         result = 1;
     else if (!strcmp(loader, HOC_KIP))
@@ -943,7 +950,7 @@ done:
     return report(result, detail, detail_size, result == SETUP_BOOT_RECOVERY ?
         "Boot recovery needs attention; temporary INI copy and transaction were retained" :
         result == SETUP_BOOT_IO ? "Cannot remove temporary Hekate INI copy" :
-        result == SETUP_BOOT_ALREADY ? "Autorun boot entry committed" :
+        result == SETUP_BOOT_ALREADY ? "CorkDeck boot entry committed" :
         "Original boot configuration restored");
 }
 
@@ -974,6 +981,11 @@ enum setup_boot_result setup_boot_install(const char *root, const char *payload_
             manifest->release[i] != '_' && manifest->release[i] != '.')
             return report(SETUP_BOOT_INVALID, detail, detail_size, "Invalid boot release identifier");
     if (options->preserve_hoc && options->loader != SETUP_BOOT_HOC) return SETUP_BOOT_INVALID;
+    /* The Horizon OC loader is installed with the owner's settings or not at all:
+     * setup has no overclock settings of its own to give. */
+    if (options->loader == SETUP_BOOT_HOC && !options->preserve_hoc)
+        return report(SETUP_BOOT_UNSUPPORTED, detail, detail_size,
+                      "The Horizon OC loader is installed only with the settings already on the card");
     result = setup_boot_recover(root, detail, detail_size);
     if (result != SETUP_BOOT_OK) return result;
     if (read_file(root, SETUP_BOOT_INI, INI_LIMIT, &ini) != 1) FAIL(SETUP_BOOT_IO, "Cannot read Hekate configuration");
@@ -981,10 +993,10 @@ enum setup_boot_result setup_boot_install(const char *root, const char *payload_
     if (!scan_entries(&ini, entries, SETUP_BOOT_MAX_ENTRIES, &count)) FAIL(SETUP_BOOT_INVALID, "Malformed Hekate configuration");
     for (i = 0; i < count; i++)
     {
-        if (!strcasecmp(entries[i].name, SETUP_BOOT_ENTRY_NAME))
+        if (setup_boot_entry_ours(entries[i].name))
         {
             if (existing >= 0 || !managed_entry(&ini, &entries[i]))
-                FAIL(SETUP_BOOT_UNSUPPORTED, "An unrecognized Autorun boot entry already exists");
+                FAIL(SETUP_BOOT_UNSUPPORTED, "An unrecognized CorkDeck or Autorun boot entry already exists");
             existing = (int)i;
         }
         if (entries[i].offset == options->entry.offset && entries[i].length == options->entry.length &&
@@ -1153,7 +1165,7 @@ const char *setup_boot_error(enum setup_boot_result result)
     switch (result)
     {
     case SETUP_BOOT_OK: return "Boot setup complete";
-    case SETUP_BOOT_ALREADY: return "Autorun boot entry already exists";
+    case SETUP_BOOT_ALREADY: return "CorkDeck boot entry already exists";
     case SETUP_BOOT_MISSING: return "Required boot payloads are not available";
     case SETUP_BOOT_INVALID: return "Invalid boot setup data";
     case SETUP_BOOT_UNSUPPORTED: return "This boot configuration is not supported";

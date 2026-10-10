@@ -38,7 +38,6 @@
 #include "steam/steam_local.h"
 #include "steam/steam_legacy_registry.h"
 #include "steam/steam_install_script.h"
-#include "clock_profile.h"
 #include "fex_options.h"
 #include "config_json.h"
 #include "app/app_settings.h"
@@ -1909,8 +1908,8 @@ static void runtime_report_interpreter(void)
     {
         seconds = armTicksToNs( now - last_tick ) / 1e9;
         log_line( "[BOX64] instructions=%llu (%.2fM/s) runs=%llu (%.0f/s)",
-                  executed, (executed - last_executed) / seconds / 1e6,
-                  runs, (runs - last_runs) / seconds );
+                  (unsigned long long)executed, (executed - last_executed) / seconds / 1e6,
+                  (unsigned long long)runs, (runs - last_runs) / seconds );
     }
     last_executed = executed;
     last_runs = runs;
@@ -4671,144 +4670,6 @@ static unsigned long runtime_setting_number( enum app_setting id, unsigned long 
     return *end || number > most ? 0 : number;
 }
 
-/* The program's overclocking profile (clock_profile.h), given to Horizon OC as
- * this application's own profile. What the section held before the first
- * profile was written is kept beside the mark, and put back when a program
- * runs with no profile and when the shell starts: a program closed from the
- * HOME menu leaves its profile behind, and the shell must not run on it.
- * While another application is in front Horizon OC does not read the section. */
-#define CLOCK_PROFILE_MARK RUNTIME_DIR "/corkdeck/clock-profile.txt"
-#ifndef static_assert   /* libnx's service calls with buffers use it */
-#define static_assert _Static_assert
-#endif
-
-struct clock_profile_set_args
-{
-    u64 title;
-    struct clock_profile_list list;
-};
-
-static Result clock_profile_get( Service *service, u64 title, struct clock_profile_list *list )
-{
-    return serviceDispatchIn( service, 5, title,
-        .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
-        .buffers = { { list, sizeof(*list) } } );
-}
-
-static void runtime_apply_clock_profile( int choice )
-{
-    struct clock_profile_list global, current, wanted, previous;
-    struct clock_profile_set_args args;
-    char line[512], *p;
-    int marked, power, part, restored = 0;
-    Service service;
-    u32 api = 0;
-    Result rc;
-    FILE *file;
-
-    if (choice < 0 || choice >= (int)CLOCK_PRESET_COUNT) choice = 0;
-    marked = read_first_line( CLOCK_PROFILE_MARK, line, sizeof(line) );
-    if (!choice && !marked) return;   /* nothing of ours is there, and nothing is asked for */
-
-    if (R_FAILED( rc = smGetService( &service, "hoc:clk" ) ))
-    {
-        if (choice) log_line( "[CLOCK] Horizon OC does not answer (%#x); the overclocking profile is not applied", rc );
-        return;
-    }
-    args.title = 0;
-    if (R_FAILED( rc = serviceDispatchOut( &service, 0, api ) ) || api != CLOCK_HOC_API ||
-        R_FAILED( rc = svcGetInfo( &args.title, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0 ) ) ||
-        R_FAILED( rc = clock_profile_get( &service, CLOCK_GLOBAL_TITLE, &global ) ) ||
-        R_FAILED( rc = clock_profile_get( &service, args.title, &current ) ))
-    {
-        log_line( "[CLOCK] this Horizon OC is not the one the profiles were made for (interface %u, result %#x); "
-                  "nothing is changed", api, rc );
-        serviceClose( &service );
-        return;
-    }
-
-    /* The mark: the section as it was before the first profile, 25 numbers. */
-    previous = current;
-    if (marked)
-    {
-        p = line;
-        for (power = 0; power < CLOCK_POWER_COUNT; power++)
-            for (part = 0; part < CLOCK_MODULE_COUNT; part++) previous.mhz[power][part] = strtoul( p, &p, 10 );
-    }
-    if (choice)
-    {
-        /* The graphics clocks that exist are the kernel module's: its table for
-         * the undervolt mode it was set to ends at 998 MHz with no undervolt,
-         * 1075 with SLT, 1152 with HiOPT and goes on to 1228 only with High UV.
-         * A profile asking for more is given the last one, and the log says so. */
-        struct { u32 module, max; } list_args = { CLOCK_GPU, 64 };
-        u32 list[64], count = 0, top = 0;
-
-        clock_profile_build( &clock_presets[choice], &global, &wanted );
-        if (R_SUCCEEDED( serviceDispatchInOut( &service, 11, list_args, count,
-                .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
-                .buffers = { { list, sizeof(list) } } ) ) && count && count <= 64)
-            top = list[count - 1] / 1000000;
-        for (power = 0; top && power < CLOCK_POWER_COUNT; power++)
-            if (wanted.mhz[power][CLOCK_GPU] > top)
-            {
-                if (power == CLOCK_POWER_CHARGING_OFFICIAL || power == CLOCK_POWER_HANDHELD)
-                    log_line( "[CLOCK] the graphics clock asked for, %u MHz, does not exist: Horizon OC's kernel module "
-                              "offers up to %u MHz in its present graphics undervolt mode (1075 needs SLT, 1152 HiOPT, "
-                              "1228 High UV; changed in its overlay, with a restart)",
-                              (unsigned int)wanted.mhz[power][CLOCK_GPU], (unsigned int)top );
-                wanted.mhz[power][CLOCK_GPU] = top;
-            }
-    }
-    else
-    {
-        wanted = previous;
-        restored = 1;
-    }
-
-    if (memcmp( &wanted, &current, sizeof(wanted) ))
-    {
-        if (choice && !marked)
-        {
-            if (!(file = fopen( CLOCK_PROFILE_MARK, "w" )))
-            {
-                log_line( "[CLOCK] the section as it was could not be kept; the profile is not applied" );
-                serviceClose( &service );
-                return;
-            }
-            for (power = 0; power < CLOCK_POWER_COUNT; power++)
-                for (part = 0; part < CLOCK_MODULE_COUNT; part++) fprintf( file, "%u ", (unsigned int)previous.mhz[power][part] );
-            fprintf( file, "\n" );
-            fclose( file );
-        }
-        args.list = wanted;
-        rc = serviceDispatchIn( &service, 6, args );
-    }
-    serviceClose( &service );
-    if (R_FAILED( rc ))
-    {
-        log_line( "[CLOCK] Horizon OC refused the profile: %#x", rc );
-        return;
-    }
-    if (restored) remove( CLOCK_PROFILE_MARK );
-    if (restored) log_line( "[CLOCK] the application's section in Horizon OC is as it was before a profile" );
-    else
-        log_line( "[CLOCK] profile %s for application %016llx: on the official charger CPU %u GPU %u memory %u MHz, "
-                  "handheld %u/%u/%u, docked %u/%u/%u, USB charging %u/%u/%u; processor governor %s",
-                  app_setting_def( APP_SET_CLOCK_PROFILE )->choices[choice].value, (unsigned long long)args.title,
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_OFFICIAL][CLOCK_CPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_OFFICIAL][CLOCK_GPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_OFFICIAL][CLOCK_MEMORY],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_HANDHELD][CLOCK_CPU], (unsigned int)wanted.mhz[CLOCK_POWER_HANDHELD][CLOCK_GPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_HANDHELD][CLOCK_MEMORY],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_DOCKED][CLOCK_CPU], (unsigned int)wanted.mhz[CLOCK_POWER_DOCKED][CLOCK_GPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_DOCKED][CLOCK_MEMORY],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_USB][CLOCK_CPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_USB][CLOCK_GPU],
-                  (unsigned int)wanted.mhz[CLOCK_POWER_CHARGING_USB][CLOCK_MEMORY],
-                  clock_presets[choice].cpu_governor_off ? "off" : "as the system has it" );
-}
-
 static void runtime_resolve_settings( const char *target, USHORT machine )
 {
     struct app_settings_limits limits = { .machine = machine, .four_cores_available = wine_nx_four_cores_available() };
@@ -5240,7 +5101,6 @@ int main( int argc, char **argv )
         wine_nx_console_active = 0;
         log_lent_memory( "the settings" );
         log_line( "[LAUNCHER] bringing the screen up: the launcher" );
-        runtime_apply_clock_profile( 0 );  /* the shell runs on the system's clocks */
         wine_nx_runtime_network_fast( 1 );
         chosen = wine_nx_launcher_run( &options, target, sizeof(target) );
         lan_log_network_pause();
@@ -5424,7 +5284,6 @@ int main( int argc, char **argv )
     log_line( "[SYNC] %s", horizon_fast_sync_enabled ? "Horizon queued waits" : "Standard" );
     wine_nx_thread_configure_cores( runtime_four_cores );
     wine_nx_thread_configure_policy( (int)runtime_setting_number( APP_SET_WORKER_POLICY, 4 ) );
-    runtime_apply_clock_profile( app_settings_get( &runtime_settings, APP_SET_CLOCK_PROFILE ) );
     {
         unsigned long mb = runtime_setting_number( APP_SET_SHADER_RAM_MB, 64 );
 
@@ -5564,7 +5423,9 @@ int main( int argc, char **argv )
      * unix-side debug buffers into TEBs, which the runtime's threads lack. */
     {
         struct __wine_debug_channel *options = (void *)((char *)teb->Peb + 2 * page_size);
-        static const char channels[][15] = { "iphlpapi", "secur32", "winsock" };
+        /* In the order of their names. seh: every exception a program raises, with its
+         * code and address -- what a program that catches its own fault and leaves says nothing of. */
+        static const char channels[][15] = { "iphlpapi", "secur32", "seh", "winsock" };
         unsigned int i = 0;
 
         for (; wine_nx_runtime_verbose && i < ARRAY_SIZE(channels); i++)

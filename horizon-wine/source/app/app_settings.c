@@ -55,6 +55,9 @@ static const char *const reason_texts[APP_REASON_COUNT][APP_LANG_COUNT] =
     [APP_REASON_FEX_MISSING] = EN_RU(
         "The FEX module for this program's architecture is not installed.",
         "Модуль FEX для архитектуры этой программы не установлен." ),
+    [APP_REASON_DEVELOPER_OFF] = EN_RU(
+        "Developer mode is off (Settings, Diagnostics), so nothing is recorded beyond failures.",
+        "Режим разработчика выключен («Настройки» → «Диагностика»), поэтому записываются только отказы." ),
     [APP_REASON_DIAGNOSTICS_OFF] = EN_RU(
         "Diagnostics are switched off as a whole.",
         "Диагностика выключена общим выключателем." ),
@@ -260,37 +263,6 @@ static const struct app_setting_def defs[APP_SET_COUNT] =
                "Занимает выбранный объём из памяти программы; сам очищается при нехватке памяти. "
                "Оправдан только там, где задержку даёт карта." ) },
 
-    /* The clocks are in clock_profile.h, by the number of the choice. */
-    [APP_SET_CLOCK_PROFILE] = { APP_SET_CLOCK_PROFILE, APP_GROUP_TRANSLATION, APP_TYPE_CHOICE, "clock-profile", NULL, "clock-profile", 0, NULL, 0, 5,
-        { { "system", NULL, EN_RU( "As the system has it", "Как в системе" ) },
-          { "economy", NULL, EN_RU( "Economy", "Экономный" ) },
-          { "balanced", NULL, EN_RU( "Balanced", "Сбалансированный" ) },
-          { "performance", NULL, EN_RU( "Performance", "Производительный" ) },
-          { "extreme", NULL, EN_RU( "Extreme", "Экстремальный" ) } },
-        EN_RU( "Overclocking profile", "Профиль разгона" ),
-        EN_RU( "Processor, graphics and memory clocks while this program runs, set through Horizon OC as the "
-               "application's own profile, which comes before the global one from the overlay. In the two "
-               "upper profiles the processor keeps its clock instead of following the load: a translated "
-               "game is one busy thread, and the governor gives it less than it was allowed. Processor / "
-               "graphics / memory, MHz: Economy 1224 / 460 / 1600, Balanced 1785 / 768 / 3000, Performance "
-               "2091 / 998 / 3000, Extreme 2397 / 1228 / 3000.",
-               "Частоты процессора, видеочипа и памяти на время работы программы. Задаются через Horizon OC "
-               "как профиль самого приложения — он главнее общего профиля из оверлея. В двух старших "
-               "профилях процессор держит частоту, а не следует за нагрузкой: игра под трансляцией — это "
-               "один занятый поток, и регулятор даёт ему меньше разрешённого. Процессор / видеочип / "
-               "память, МГц: Экономный 1224 / 460 / 1600, Сбалансированный 1785 / 768 / 3000, "
-               "Производительный 2091 / 998 / 3000, Экстремальный 2397 / 1228 / 3000." ),
-        EN_RU( "Never above the global profile of the same power mode, and voltages are not changed. Higher "
-               "profiles heat the console and drain the battery faster; a clock the console is not stable "
-               "at shows as a freeze or a crash. Needs Horizon OC 2.5.1; without it nothing changes. "
-               "Graphics clocks above 998 MHz exist only in Horizon OC's graphics undervolt modes; without "
-               "them a profile gets 998.",
-               "Не выше общего профиля для того же режима питания; напряжения не меняются. Старшие профили "
-               "сильнее греют консоль и быстрее разряжают батарею; частота, на которой консоль нестабильна, "
-               "проявится зависанием или вылетом. Нужен Horizon OC 2.5.1; без него ничего не меняется. "
-               "Частоты видеочипа выше 998 МГц есть только в режимах пониженного напряжения видеочипа "
-               "Horizon OC; без них профиль получит 998." ) },
-
     [APP_SET_OWN_CONTROLS] = { APP_SET_OWN_CONTROLS, APP_GROUP_INPUT, APP_TYPE_SWITCH, "own-controls", NULL, NULL, 0, NULL, 0, 2,
         { { "0", "off", EN_RU( "Shared", "Общие" ) }, { "1", "on", EN_RU( "Its own", "Свои" ) } },
         EN_RU( "Key mapping", "Назначение клавиш" ),
@@ -318,6 +290,17 @@ static const struct app_setting_def defs[APP_SET_COUNT] =
                "Сама открывает экранную клавиатуру, когда фокус получает текстовое поле. «−» вместе с нажатием "
                "правого стика открывает её в любой программе при любом значении." ),
         { NULL, NULL } },
+
+    [APP_SET_DEVELOPER] = { APP_SET_DEVELOPER, APP_GROUP_DIAGNOSTICS, APP_TYPE_SWITCH, NULL, NULL, "developer-mode", 0, NULL, 0, 2, OFF_ON,
+        EN_RU( "Developer mode", "Режим разработчика" ),
+        EN_RU( "All diagnostics behind one switch: the Diagnostics page of the main menu, detailed logs of "
+               "programs, counters, traces, the profiler and the status served over Wi-Fi.",
+               "Вся диагностика за одним переключателем: раздел «Диагностика» в главном меню, подробные журналы "
+               "программ, счётчики, трассы, профайлер и раздача состояния по Wi-Fi." ),
+        EN_RU( "Off, only failures are written down. On, a program writes logs to the card and may run slower. "
+               "Applies from the next start of a program.",
+               "Выключено — записываются только отказы. Включено — программа пишет журналы на карту и может "
+               "работать медленнее. Действует со следующего запуска программы." ) },
 
     [APP_SET_DIAGNOSTICS_MODE] = { APP_SET_DIAGNOSTICS_MODE, APP_GROUP_DIAGNOSTICS, APP_TYPE_CHOICE, "diagnostics", NULL, "diagnostics", 0, NULL, 2, 3,
         { { "off", NULL, EN_RU( "Off", "Выключена" ) },
@@ -611,6 +594,10 @@ void app_settings_resolve( struct app_settings *out, const struct wine_nx_config
     if (!limits->vulkan) apply_limit( &out->values[APP_SET_RENDERER], 0, APP_REASON_NO_VULKAN );
     if (!limits->lsfg_installed) apply_limit( &out->values[APP_SET_LSFG], 0, APP_REASON_LSFG_MISSING );
 
+    /* Diagnostics are a developer's: without the mode there are none. */
+    if (out->values[APP_SET_DEVELOPER].effective <= 0)
+        apply_limit( &out->values[APP_SET_DIAGNOSTICS_MODE], 0, APP_REASON_DEVELOPER_OFF );
+
     /* Extended diagnostics alone may change how the program runs. */
     if (out->values[APP_SET_DIAGNOSTICS_MODE].effective < 2)
         for (n = 0; n < sizeof(intrusive) / sizeof(intrusive[0]); n++)
@@ -633,10 +620,13 @@ void app_settings_resolve( struct app_settings *out, const struct wine_nx_config
     /* Switched off as a whole means off: nothing above brings a part of it back. */
     if (out->values[APP_SET_DIAGNOSTICS_MODE].effective == 0)
     {
+        enum app_setting_reason why = out->values[APP_SET_DEVELOPER].effective <= 0 ? APP_REASON_DEVELOPER_OFF
+                                                                                    : APP_REASON_DIAGNOSTICS_OFF;
+
         for (n = 0; n < sizeof(intrusive) / sizeof(intrusive[0]); n++)
-            apply_limit( &out->values[intrusive[n]], 0, APP_REASON_DIAGNOSTICS_OFF );
+            apply_limit( &out->values[intrusive[n]], 0, why );
         for (n = 0; n < sizeof(passive) / sizeof(passive[0]); n++)
-            apply_limit( &out->values[passive[n]], 0, APP_REASON_DIAGNOSTICS_OFF );
+            apply_limit( &out->values[passive[n]], 0, why );
     }
 }
 

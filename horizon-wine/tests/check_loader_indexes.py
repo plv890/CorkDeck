@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+import arm64_host
 
 root = Path(__file__).resolve().parents[2]
 loader = (root / 'dlls/ntdll/loader.c').read_text()
@@ -200,9 +201,11 @@ with tempfile.TemporaryDirectory(prefix='loader-indexes-') as temp:
     build = Path(temp)
     path = build / 'indexes.c'
     path.write_text(fixture + code + tests)
-    subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11', '-g', '-O2',
+    # The unwinder is ARM64's: the tables and the context are that machine's.
+    subprocess.run(arm64_host.compiler(os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang')) + arm64_host.flags([
+                    '-std=gnu11', '-g', '-O2',
                     '-fms-extensions', '-fshort-wchar', '-fsanitize=address,undefined',
                     '-D__WINESRC__', '-D_WIN64', '-I' + str(root / 'include'),
                     '-I' + str(root / 'dlls/ntdll'),
-                    str(path), '-o', str(build / 'indexes')], check=True)
-    subprocess.run([str(build / 'indexes')], check=True, timeout=30)
+                    str(path), '-o', str(build / 'indexes')]), check=True)
+    subprocess.run(arm64_host.run(build / 'indexes'), check=True, timeout=120)

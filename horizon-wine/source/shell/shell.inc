@@ -18,6 +18,7 @@
 #include <malloc.h>
 #include "../app/app_settings.h"
 #include "../app/app_records.h"
+#include "../app/app_version.h"
 #include "../config_json.h"
 #include "../system_language.h"
 #include "../steam/steam_provider.h"
@@ -34,7 +35,9 @@
 #define SH_CORK      (SDL_Color){ 199, 154, 98, 255 }
 #define SH_MARGIN    64
 #define SH_TOP       72
-#define SH_OWNED     256
+/* The account's games that are not installed: an account may hold thousands. */
+#define SH_OWNED     4096
+#define SH_ITEMS     (LAUNCHER_MAX_ENTRIES + SH_OWNED)
 
 enum sh_tab { TAB_ALL, TAB_FAVORITES, TAB_INSTALLED, TAB_AVAILABLE, TAB_LOCAL, TAB_CATEGORY, TAB_COUNT };
 enum sh_page { PAGE_HOME, PAGE_LIBRARY, PAGE_DOWNLOADS, PAGE_SETTINGS, PAGE_MAINTENANCE, PAGE_STORAGE,
@@ -48,13 +51,14 @@ static struct shell
     int home_row, home_col;
     int tab, sort, list_view, zone, tool, selection, top;
     char category[48];
-    int items[LAUNCHER_MAX_ENTRIES];       /* a program's index, or -1 - n for the n-th Steam game not installed */
+    int items[SH_ITEMS];                   /* a program's index, or -1 - n for the n-th Steam game not installed */
     int count;
     unsigned char steam[LAUNCHER_MAX_ENTRIES], known[LAUNCHER_MAX_ENTRIES];
     struct app_record records[LAUNCHER_MAX_ENTRIES];
     struct steam_game owned[SH_OWNED];
     int owned_count;
     int steam_asked;      /* the saved session was tried once this run */
+    int developer;        /* developer mode: the Diagnostics page, the card's probe, the logs */
     Uint32 owned_read;
     struct wine_nx_config global;
     char global_path[512];
@@ -214,6 +218,17 @@ static int sh_is_steam( struct launcher *l, int index )
             while (f && fgets( line, sizeof(line), f ))
                 if (!strncmp( line, "appid=", 6 )) sh.app_id[index] = (unsigned int)strtoul( line + 6, NULL, 10 );
             if (f) fclose( f );
+            /* A folder brought over from another card has the marker and not
+             * the record Steam's side finds it by, and was offered there as a
+             * game still to install. */
+            if (sh.app_id[index] && !steam_storage_directory( l->options->runtime_dir, sh.app_id[index], marker ))
+            {
+                int recorded = steam_storage_record( l->options->runtime_dir, sh.app_id[index], dir );
+
+                launcher_log( "[SHELL] the Steam installation of app %u in %s had no record: %s", sh.app_id[index], dir,
+                              recorded ? "written" : "could not be written" );
+                if (recorded) { steam_ui_note_install( sh.app_id[index] ); sh.owned_read = 0; }
+            }
             break;
         }
     }
@@ -257,6 +272,9 @@ static void sh_apply_global( struct launcher *l )
         sh.language = !strcmp( getenv( "CORKDECK_LANGUAGE" ), "ru" ) ? APP_LANG_RU : APP_LANG_EN;
 #endif
     shell_language = sh.language;
+    if (sh.developer && app_settings_get( &s, APP_SET_DEVELOPER ) <= 0) lan_log_stop();
+    sh.developer = app_settings_get( &s, APP_SET_DEVELOPER ) > 0;
+    steam_ui_set_developer( sh.developer );
     l->ui.animations = app_settings_get( &s, APP_SET_ANIMATIONS ) > 0;
     l->ui.muted = app_settings_get( &s, APP_SET_SOUNDS ) <= 0;
     l->options->reopen_launcher = app_settings_get( &s, APP_SET_REOPEN_SHELL ) > 0;
@@ -316,6 +334,17 @@ static size_t sh_art_write( char *data, size_t size, size_t count, void *file )
  * file asked about, and the free space. Says when any of them changes. */
 static char sh_probe_text[240];
 
+/* The heap in use, in megabytes. glibc has renamed the call that counts it. */
+static unsigned int sh_heap_used_mb( void )
+{
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || __GLIBC_MINOR__ >= 33)
+    struct mallinfo2 heap = mallinfo2();
+#else
+    struct mallinfo heap = mallinfo();
+#endif
+    return (unsigned)(heap.uordblks >> 20);
+}
+
 static void sh_card_probe( struct launcher *l, const char *when )
 {
     static int last = -1;
@@ -328,6 +357,7 @@ static void sh_card_probe( struct launcher *l, const char *when )
 
     static Uint32 tried;
 
+    if (when[0] == 't' && !sh.developer) return;
     if (when[0] == 't' && tried && SDL_GetTicks() - tried < 250) return;
     if (sh_probe_text[0] == 'C') return;   /* said once; the first failure is the one that tells */
     tried = SDL_GetTicks() | 1;
@@ -360,13 +390,11 @@ static void sh_card_probe( struct launcher *l, const char *when )
     {
         /* On the screen too: a card that does not answer cannot take the log. */
         void *block = malloc( 4 << 20 );
-        struct mallinfo heap = mallinfo();
-
         char dlls[64];
         int tone;
 
         snprintf( sh_probe_text, sizeof(sh_probe_text), "CARD %s %ums fs=%x/%x/%x heap %s %uM art=%d dll=%s steam=%d | %s",
-                  when, SDL_GetTicks(), open_fs, stat_fs, vfs_fs, block ? "ok" : "FULL", (unsigned)(heap.uordblks >> 20),
+                  when, SDL_GetTicks(), open_fs, stat_fs, vfs_fs, block ? "ok" : "FULL", sh_heap_used_mb(),
                   sh.art_thread != NULL, launcher_dlls_status( l->dlls, dlls, sizeof(dlls), &tone ), steam_ui_online(),
                   launcher_last_log );
         free( block );
@@ -698,8 +726,8 @@ static void sh_read_owned( struct launcher *l, int force )
     if (!force && sh.owned_read && SDL_GetTicks() - sh.owned_read < 15000) return;
     sh.owned_read = SDL_GetTicks() | 1;
     sh.owned_count = 0;
-    if (!(page = malloc( sizeof(*page) * 1024 ))) return;
-    count = steam_ui_owned( l->options->runtime_dir, page, 1024 );
+    if (!(page = malloc( sizeof(*page) * SH_OWNED ))) return;
+    count = steam_ui_owned( l->options->runtime_dir, page, SH_OWNED );
     for (i = 0; i < count && sh.owned_count < SH_OWNED; i++)
         if (!page[i].installed) sh.owned[sh.owned_count++] = page[i];
     free( page );
@@ -733,8 +761,11 @@ static void sh_rebuild( struct launcher *l, int keep )
     }
     if (sh.tab == TAB_ALL || sh.tab == TAB_AVAILABLE)
     {
+        /* Every installation is looked at before the account's games are
+         * listed, so that none of them is listed as still to install. */
+        for (i = 0; i < l->program_count; i++) if (!l->programs[i].removed) sh_is_steam( l, i );
         sh_read_owned( l, 0 );
-        for (i = 0; i < sh.owned_count && sh.count < LAUNCHER_MAX_ENTRIES; i++)
+        for (i = 0; i < sh.owned_count && sh.count < SH_ITEMS; i++)
             if (contains_case( sh.owned[i].name, l->search )) sh.items[sh.count++] = -1 - i;
     }
     sh_sort_launcher = l;
@@ -811,6 +842,8 @@ enum { SH_ACT_FEX = APP_SET_COUNT, SH_ACT_KEYS, SH_ACT_TITLE, SH_ACT_ARGS, SH_FE
 
 static int sh_settings_has( const struct sh_settings *s, const struct app_setting_def *def )
 {
+    /* Without developer mode its switch is all there is of diagnostics. */
+    if (def->group == APP_GROUP_DIAGNOSTICS && def->id != APP_SET_DEVELOPER && !sh.developer) return 0;
     if (!s->p) return def->global_key != NULL;
     if (!def->profile_key) return 0;
     if (def->id == APP_SET_DIAGNOSTICS_MODE) return 0;
@@ -1343,12 +1376,275 @@ static void sh_launch_option( struct launcher *l, struct program *p )
     }
 }
 
+/***********************************************************************
+ * Deleting a game from the card
+ *
+ * The folder of a Steam installation is the one that holds the installer's
+ * marker; of any other program, the folder its file is in. The files are
+ * counted first, so that the question names how much goes, and removed with
+ * the marker last: a removal that was cut short is still an installation that
+ * can be removed again.
+ */
+
+static const char *sh_bytes( unsigned long long bytes, char *out, size_t size );
+
+struct sh_tree
+{
+    struct ui *ui;
+    const char *title;
+    unsigned long long bytes, files;   /* counted */
+    unsigned long long done_bytes, done_files;
+    int erase, error;
+    Uint32 shown;
+};
+
+static void sh_tree_show( struct sh_tree *t, int force )
+{
+    char status[160];
+
+    if (!force && SDL_GetTicks() - t->shown < 120) return;
+    t->shown = SDL_GetTicks();
+    if (t->erase) snprintf( status, sizeof(status), sh_tr( "Deleted %llu of %llu files" ), t->done_files, t->files );
+    else snprintf( status, sizeof(status), sh_tr( "Counting the files: %llu" ), t->files );
+    ui_progress_update( t->ui, t->title, status, t->erase ? t->done_bytes : 0, t->erase ? (t->bytes ? t->bytes : 1) : 0 );
+}
+
+static int sh_tree_walk( struct sh_tree *t, const char *path, int depth )
+{
+    char child[1024];
+    struct dirent *entry;
+    struct stat st;
+    DIR *dir;
+    int ok = 1;
+
+    if (depth > 32) { t->error = ELOOP; return 0; }
+    if (lstat( path, &st )) { t->error = errno ? errno : EIO; return 0; }
+    if (!S_ISDIR( st.st_mode ))
+    {
+        if (!t->erase) { t->bytes += (unsigned long long)st.st_size; t->files++; }
+        else
+        {
+            if (unlink( path )) { t->error = errno ? errno : EIO; return 0; }
+            t->done_bytes += (unsigned long long)st.st_size;
+            t->done_files++;
+        }
+        sh_tree_show( t, 0 );
+        return 1;
+    }
+    if (!(dir = opendir( path ))) { t->error = errno ? errno : EIO; return 0; }
+    for (;;)
+    {
+        errno = 0;
+        if (!(entry = readdir( dir ))) { if (errno) { t->error = errno; ok = 0; } break; }
+        if (!strcmp( entry->d_name, "." ) || !strcmp( entry->d_name, ".." )) continue;
+        if (t->erase && !depth && !strcmp( entry->d_name, "autorun-steam-install.ini" )) continue;
+        if (snprintf( child, sizeof(child), "%s/%s", path, entry->d_name ) >= (int)sizeof(child)) { t->error = ENAMETOOLONG; ok = 0; break; }
+        if (!sh_tree_walk( t, child, depth + 1 )) { ok = 0; break; }
+    }
+    closedir( dir );
+    if (ok && t->erase)
+    {
+        if (!depth)
+        {
+            snprintf( child, sizeof(child), "%s/autorun-steam-install.ini", path );
+            if (!lstat( child, &st ))
+            {
+                if (unlink( child )) { t->error = errno ? errno : EIO; return 0; }
+                t->done_bytes += (unsigned long long)st.st_size;
+                t->done_files++;
+            }
+        }
+        if (rmdir( path )) { t->error = errno ? errno : EIO; return 0; }
+    }
+    return ok;
+}
+
+/* The folder of the Steam installation a program belongs to. */
+static int sh_steam_folder( struct launcher *l, int index, char *dir, size_t size )
+{
+    char marker[560];
+    int depth;
+
+    snprintf( dir, size, "%s", l->programs[index].path );
+    for (depth = 0; depth < 8; depth++)
+    {
+        parent_dir( dir );
+        if (is_root( dir )) break;
+        snprintf( marker, sizeof(marker), "%s/autorun-steam-install.ini", dir );
+        if (file_exists( marker )) return 1;
+    }
+    return 0;
+}
+
+static int sh_path_inside( const char *path, const char *dir )
+{
+    size_t len = strlen( dir );
+
+    return !strncasecmp( path, dir, len ) && (!path[len] || path[len] == '/');
+}
+
+/* Whether a folder is a program's own and may go whole. When it may not, says why. */
+static const char *sh_folder_shared( struct launcher *l, int index, const char *folder, char *other, size_t other_size )
+{
+    static const char *const kept[] = { "windows", "users", "Program Files", "Program Files (x86)", "ProgramData", "Steam" };
+    static const char *const card[] = { "switch", "atmosphere", "bootloader", "Nintendo", "config", "emuMMC",
+                                        "Emutendo", "SaltySD", "sept", "warmboot_mariko", "backup", "JKSV", "themes" };
+    char path[600];
+    unsigned int i;
+    int j;
+
+    other[0] = 0;
+    if (is_root( folder ) || !strcasecmp( folder, LAUNCHER_DRIVE_C ) || sh_path_inside( l->options->runtime_dir, folder ))
+        return "The program's file lies in a folder that is shared, not in a folder of its own.";
+    if (sh_path_inside( folder, LAUNCHER_DRIVE_C ))
+    {
+        for (i = 0; i < sizeof(kept) / sizeof(kept[0]); i++)
+        {
+            snprintf( path, sizeof(path), "%s/%s", LAUNCHER_DRIVE_C, kept[i] );
+            /* Windows and the user profiles not at any depth; the others as themselves. */
+            if (i < 2 ? sh_path_inside( folder, path ) : !strcasecmp( folder, path ))
+                return "The program's file lies in a folder that is shared, not in a folder of its own.";
+        }
+    }
+    else if (sh_path_inside( folder, l->options->runtime_dir ))
+        return "The program's file lies among CorkDeck's own files.";
+    else if (!usb_program_path( folder ))
+    {
+        for (i = 0; i < sizeof(card) / sizeof(card[0]); i++)
+        {
+            snprintf( path, sizeof(path), "sdmc:/%s", card[i] );
+            if (!strcasecmp( folder, path )) return "The program's file lies in a folder that is shared, not in a folder of its own.";
+        }
+    }
+    for (j = 0; j < l->program_count; j++)
+    {
+        if (j == index || l->programs[j].removed || !sh_path_inside( l->programs[j].path, folder )) continue;
+        snprintf( other, other_size, "%s", l->programs[j].title );
+        return "Another program of the library lies in the same folder: %s.";
+    }
+    return NULL;
+}
+
+static void sh_delete_from_card( struct launcher *l, int index, int *gone )
+{
+    struct ui *ui = &l->ui;
+    struct program *p = &l->programs[index];
+    struct sh_tree tree = { .ui = ui, .title = "Delete from the card" };
+    char folder[512], text[900], size[40], other[128], path[600], shown[512];
+    const char *why;
+    unsigned int app = 0, fs_error = 0;
+    int steam = sh_steam_folder( l, index, folder, sizeof(folder) ), counted, erased, i;
+
+    if (steam)
+    {
+        sh.known[index] &= ~1;
+        sh_is_steam( l, index );
+        app = sh.app_id[index];
+        if (steam_ui_busy( app ))
+        {
+            ui_message( ui, sh_tr( "Delete from the card" ),
+                        sh_tr( "Steam is downloading or removing a game right now. Wait for it to finish, or cancel it on the Downloads page." ) );
+            return;
+        }
+    }
+    else
+    {
+        snprintf( folder, sizeof(folder), "%s", p->path );
+        parent_dir( folder );
+        if ((why = sh_folder_shared( l, index, folder, other, sizeof(other) )))
+        {
+            char reason[300];
+
+            snprintf( reason, sizeof(reason), sh_tr( why ), other );
+            snprintf( text, sizeof(text), "%s %s", reason,
+                      sh_tr( "CorkDeck does not delete such a folder: other things would go with it. Delete the game's files in a file manager, and remove the entry from the library here." ) );
+            ui_message( ui, sh_tr( "Delete from the card" ), text );
+            return;
+        }
+    }
+    if (!directory_exists( folder ))
+    {
+        ui_message( ui, sh_tr( "Delete from the card" ),
+                    sh_tr( "The program's folder is not on the card any more. Remove the entry from the library instead." ) );
+        return;
+    }
+    launcher_log( "[SHELL] delete from the card: \"%s\" (%s, app %u), folder %s", p->title, steam ? "Steam" : "local", app, folder );
+    ui_progress_begin( ui );
+    sh_tree_show( &tree, 1 );
+    counted = sh_tree_walk( &tree, folder, 0 );
+    ui_progress_end( ui );
+    if (!counted)
+    {
+        launcher_log( "[SHELL] delete from the card: counting failed, errno %d", tree.error );
+        snprintf( text, sizeof(text), sh_tr( "The folder could not be read (error %d). Nothing was deleted." ), tree.error );
+        ui_message( ui, sh_tr( "Delete from the card" ), text );
+        return;
+    }
+    /* As the folder is known in Windows when it is on drive C. */
+    if (sh_path_inside( folder, LAUNCHER_DRIVE_C ))
+    {
+        char *c;
+
+        snprintf( shown, sizeof(shown), "C:%s", folder + strlen( LAUNCHER_DRIVE_C ) );
+        for (c = shown; *c; c++) if (*c == '/') *c = '\\';
+    }
+    else snprintf( shown, sizeof(shown), "%s", folder );
+    snprintf( text, sizeof(text),
+              sh_tr( steam ? "\"%s\" will be deleted from the card: the folder %s, %s in %llu files, with the record of its installation and its unfinished download. Saves the game keeps in the Windows user profile stay. This cannot be undone."
+                           : "\"%s\" will be deleted from the card: the folder %s with everything in it, %s in %llu files. Saves the game keeps in the Windows user profile stay. This cannot be undone." ),
+              p->title, shown, sh_bytes( tree.bytes, size, sizeof(size) ), tree.files );
+    if (!ui_confirm( ui, sh_tr( "Delete from the card" ), text, sh_tr( "Delete" ) ))
+    {
+        launcher_log( "[SHELL] delete from the card: not confirmed" );
+        return;
+    }
+    tree.erase = 1;
+    ui_progress_begin( ui );
+    sh_tree_show( &tree, 1 );
+    erased = sh_tree_walk( &tree, folder, 0 );
+    ui_progress_end( ui );
+    launcher_log( "[SHELL] delete from the card: %s, %llu of %llu files, %llu of %llu bytes, errno %d", erased ? "done" : "FAILED",
+                  tree.done_files, tree.files, tree.done_bytes, tree.bytes, tree.error );
+    if (!erased)
+    {
+        snprintf( text, sizeof(text),
+                  sh_tr( "Deleting stopped with error %d: %s freed, part of the folder is still on the card. Choose the deletion again to finish it." ),
+                  tree.error, sh_bytes( tree.done_bytes, size, sizeof(size) ) );
+        ui_message( ui, sh_tr( "Delete from the card" ), text );
+        for (i = 0; i < l->program_count; i++)
+            if (sh_path_inside( l->programs[i].path, folder )) l->programs[i].missing = !file_exists( l->programs[i].path );
+        return;
+    }
+    if (steam && app)
+    {
+        runtime_file( l, "steam/installed", path, sizeof(path) );
+        snprintf( path + strlen( path ), sizeof(path) - strlen( path ), "/%u.path", app );
+        unlink( path );
+        runtime_file( l, "steam/selected", path, sizeof(path) );
+        snprintf( path + strlen( path ), sizeof(path) - strlen( path ), "/%u.exe", app );
+        unlink( path );
+        if (steam_storage_discard( l->options->runtime_dir, app, &fs_error ))
+            launcher_log( "[SHELL] delete from the card: the unfinished download of app %u stayed, errno %u", app, fs_error );
+        steam_ui_forget_install( app );
+        sh.owned_read = 0;
+    }
+    if (!steam_unregister_directory( l, folder ))
+        ui_toast( ui, "The files are deleted, but the library could not be saved. Remove the entry by hand.", 5000 );
+    else
+    {
+        snprintf( text, sizeof(text), sh_tr( "Deleted from the card: %s freed" ), sh_bytes( tree.bytes, size, sizeof(size) ) );
+        ui_toast( ui, text, 4000 );
+    }
+    for (i = 0; i < l->program_count; i++) sh_forget( i );
+    *gone = 1;
+}
+
 static void sh_manage( struct launcher *l, int index, int *gone )
 {
     struct program *p = &l->programs[index];
     struct app_record *record = sh_record( l, index );
-    const char *items[8];
-    int count = 0, chosen, favorite, category, art, shortcut, locate = -1, hide, remove_item;
+    const char *items[9];
+    int count = 0, chosen, favorite, category, art, shortcut, locate = -1, hide, remove_item, delete_item;
 
     items[favorite = count++] = sh_tr( p->favorite ? "Remove from favourites" : "Add to favourites" );
     items[category = count++] = sh_tr( "Category" );
@@ -1357,6 +1653,7 @@ static void sh_manage( struct launcher *l, int index, int *gone )
     if (p->missing) items[locate = count++] = sh_tr( "Locate the program" );
     items[hide = count++] = sh_tr( p->settings.hidden ? "Show in the library" : "Hide from the library" );
     items[remove_item = count++] = sh_tr( "Remove from the library" );
+    items[delete_item = count++] = sh_tr( "Delete from the card" );
     chosen = ui_menu( &l->ui, p->title, items, count, 0 );
     ui_start_screen( &l->ui );
     if (chosen < 0) return;
@@ -1428,6 +1725,7 @@ static void sh_manage( struct launcher *l, int index, int *gone )
         if (!save_library( l )) p->removed = 0;
         else *gone = 1;
     }
+    else if (chosen == delete_item) sh_delete_from_card( l, index, gone );
     ui_start_screen( &l->ui );
     sh_forget( index );
 }
@@ -1448,6 +1746,59 @@ static int sh_side_card( struct ui *ui, int x, int y, int w, const char *title, 
     return h + 12;
 }
 
+/* What the program's file asks for that Windows here does not have. A missing
+ * part of Microsoft's Visual C++ 2015-2022 package is fetched from Microsoft,
+ * checked, and its libraries are put in the Windows folder -- once for each
+ * architecture, for any program, with nothing to press. Returns -1 when the
+ * user chose not to start, 0 to go on. */
+static int sh_dependencies( struct launcher *l, struct program *p )
+{
+    struct ui *ui = &l->ui;
+    struct steam_prereq_missing missing;
+    char names[400] = "", text[900];
+    unsigned int i, error, added = 0, kept = 0;
+
+    if (!steam_prereq_missing( l->options->runtime_dir, p->path, &missing ) || !missing.count) return 0;
+    for (i = 0; i < missing.count; i++)
+        snprintf( names + strlen( names ), sizeof(names) - strlen( names ), "%s%s", i ? ", " : "", missing.names[i] );
+    launcher_log( "[SHELL] \"%s\" asks for libraries that are not here: %s%s", p->title, names,
+                  missing.vc14 ? " (Visual C++ 2015-2022)" : "" );
+    if (missing.vc14 && !steam_prereq_tried( l->options->runtime_dir, missing.architecture, 0 ))
+    {
+        error = steam_prerequisites_fetch_ui( ui, l->options->runtime_dir, missing.architecture );
+        if (error == STEAM_PREREQ_CANCELLED) return -1;
+        if (!error)
+        {
+            ui_progress_begin( ui );
+            ui_progress_update( ui, "Microsoft libraries", sh_tr( "Adding Microsoft Visual C++ 2015-2022 to Windows..." ), 0, 0 );
+            error = steam_prereq_unpack( l->options->runtime_dir, missing.architecture, &added, &kept );
+            ui_progress_end( ui );
+            /* Tried means the package was read: a download that failed is tried again. */
+            if (!error) steam_prereq_tried( l->options->runtime_dir, missing.architecture, 1 );
+        }
+        launcher_log( "[SHELL] Visual C++ 2015-2022 %s for \"%s\": error %u, %u libraries added, %u already there",
+                      missing.architecture ? "x64" : "x86", p->title, error, added, kept );
+        if (error)
+        {
+            snprintf( text, sizeof(text),
+                      sh_tr( "This game needs Microsoft Visual C++ 2015-2022 (%s is missing), and it could not be added: error %u. Check the internet connection and press Play again. The game may not start without it." ),
+                      names, error );
+            return ui_confirm( ui, sh_tr( "Microsoft libraries" ), text, sh_tr( "Play anyway" ) ) ? 0 : -1;
+        }
+        if (!steam_prereq_missing( l->options->runtime_dir, p->path, &missing ) || !missing.count)
+        {
+            ui_toast( ui, "Microsoft Visual C++ 2015-2022 was added for this game", 3000 );
+            return 0;
+        }
+        for (names[0] = 0, i = 0; i < missing.count; i++)
+            snprintf( names + strlen( names ), sizeof(names) - strlen( names ), "%s%s", i ? ", " : "", missing.names[i] );
+    }
+    snprintf( text, sizeof(text),
+              sh_tr( "This game asks for libraries that are not installed: %s. CorkDeck has no automatic installation for them yet. The game may not start." ),
+              names );
+    return ui_confirm( ui, sh_tr( "Microsoft libraries" ), text, sh_tr( "Play anyway" ) ) ? 0 : -1;
+}
+
 /* Returns 1 with target set when the program is to start. */
 static int sh_app_page( struct launcher *l, int index, char *target, size_t size )
 {
@@ -1456,6 +1807,7 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
     struct ui *ui = &l->ui;
     struct ui_input input;
     int focus = 0, gone = 0, dirty = 1, overrides = 0, has_last = 0;
+    struct steam_prereq_missing libraries = { 0 };
     struct sh_settings s = { .l = l };
     struct app_session last;
     struct dxvk_version dxvk;
@@ -1497,7 +1849,10 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
                     if (p->missing)
                         ui_message( ui, sh_tr( "Program unavailable" ),
                                     sh_tr( "The program's file is not where it was. Connect its drive, or use Manage > Locate the program." ) );
-                    else if (start_program( l, p, target, size )) return 1;
+                    else
+                    {
+                        if (!sh_dependencies( l, p ) && start_program( l, p, target, size )) return 1;
+                    }
                     ui_start_screen( ui );
                 }
                 else if (focus == 1) sh_launch_option( l, p );
@@ -1527,6 +1882,7 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
                 dxvk_resolve_version( (enum dxvk_source)s.resolved.values[APP_SET_DXVK_SOURCE].effective,
                                       l->options->runtime_dir, p->machine, s.resolved.values[APP_SET_DXVK_VERSION].text, &dxvk );
             has_last = p->catalog_id && app_record_sessions( l->options->runtime_dir, p->catalog_id, &last, 1 );
+            if (p->missing || !steam_prereq_missing( l->options->runtime_dir, p->path, &libraries )) libraries.count = 0;
             dirty = 0;
         }
         sh_frame_begin( l );
@@ -1563,8 +1919,9 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
 
         /* What a start will use, and whether it is there. */
         {
-            const char *labels[3], *values[3];
-            SDL_Color colors[3];
+            const char *labels[4], *values[4];
+            SDL_Color colors[4];
+            char library_text[96];
             /* From under the top bar, so that three cards end above the buttons. */
             int cy = 104, cx = 880, cw = 336, dxvk_wanted = s.resolved.values[APP_SET_RENDERER].effective != 0;
 
@@ -1583,7 +1940,16 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
             labels[2] = "Steam";
             values[2] = sh_tr( sh_is_steam( l, index ) ? "prepared at start" : "not needed" );
             colors[2] = sh_is_steam( l, index ) ? SH_GREEN : ui->dim;
-            cy += sh_side_card( ui, cx, cy, cw, sh_tr( "DEPENDENCIES" ), labels, values, colors, 3 );
+            /* Only when something is asked for that is not there: the card has no room to spare. */
+            if (libraries.count)
+            {
+                labels[3] = sh_tr( "Libraries" );
+                if (libraries.count == 1) snprintf( library_text, sizeof(library_text), sh_tr( "no %s" ), libraries.names[0] );
+                else snprintf( library_text, sizeof(library_text), sh_tr( "%u are missing" ), libraries.count );
+                values[3] = library_text;
+                colors[3] = SH_AMBER;
+            }
+            cy += sh_side_card( ui, cx, cy, cw, sh_tr( "DEPENDENCIES" ), labels, values, colors, libraries.count ? 4 : 3 );
 
             labels[0] = sh_tr( "Translator" );
             values[0] = p->machine == 0x014c || p->machine == 0x8664
@@ -1634,6 +2000,42 @@ static const char *sh_bytes( unsigned long long bytes, char *out, size_t size )
     return out;
 }
 
+/* Downloads that were begun and not finished, by the folder each left on the
+ * card: after the application is started again Steam remembers none of them. */
+static int sh_unfinished( struct launcher *l, unsigned int *apps, int capacity )
+{
+    char path[512], installed[512];
+    struct dirent *entry;
+    struct stat st;
+    DIR *dir;
+    int count = 0;
+
+    runtime_file( l, "steam/staging", path, sizeof(path) );
+    if (!(dir = opendir( path ))) return 0;
+    while (count < capacity && (entry = readdir( dir )))
+    {
+        char *end, item[800];
+        unsigned long app = strtoul( entry->d_name, &end, 10 );
+
+        if (!app || *end) continue;
+        snprintf( item, sizeof(item), "%s/%s", path, entry->d_name );
+        if (stat( item, &st ) || !S_ISDIR( st.st_mode )) continue;
+        if (steam_storage_directory( l->options->runtime_dir, (uint32_t)app, installed )) continue;
+        apps[count++] = (unsigned int)app;
+    }
+    closedir( dir );
+    return count;
+}
+
+static const char *sh_unfinished_name( uint32_t app, char *out, size_t size )
+{
+    const char *name = sh_owned_name( app );
+
+    if (strcmp( name, "Steam" )) return name;
+    snprintf( out, size, sh_tr( "Steam game %u" ), app );
+    return out;
+}
+
 static void sh_downloads( struct launcher *l )
 {
     static float network[SH_SPEED_SAMPLES], card[SH_SPEED_SAMPLES];
@@ -1644,8 +2046,10 @@ static void sh_downloads( struct launcher *l )
     unsigned long long last_network = 0, last_card = 0;
     Uint32 sampled = 0;
     uint32_t asked_app = 0;
-    unsigned int asked_attempts = 0;
-    int have_last = 0, i;
+    unsigned int asked_attempts = 0, left[6];
+    uint32_t wait_app = 0;
+    Uint32 wait_since = 0;
+    int have_last = 0, i, left_count = 0, left_selected = 0, left_scan = 1, last_state = -1;
 
     launcher_log( "[SHELL] Downloads" );
     ui_start_screen( ui );
@@ -1653,12 +2057,40 @@ static void sh_downloads( struct launcher *l )
     {
         struct ui_hint hints[3];
         char text[200], a[40], b[40];
-        int active, can_continue, stuck, ask = 0, hint_count = 0, x = SH_MARGIN, w = ui->width - 2 * SH_MARGIN, y;
+        int active, can_continue, stuck, idle, ask = 0, hint_count = 0, x = SH_MARGIN, w = ui->width - 2 * SH_MARGIN, y;
         Uint32 now = SDL_GetTicks();
 
         memset( &d, 0, sizeof(d) );
         steam_ui_download( &d );
         active = steam_download_active( d.state );
+        /* A download that was cancelled and removed is no download any more. */
+        idle = !d.app_id || d.state == STEAM_DOWNLOAD_IDLE || d.state == STEAM_DOWNLOAD_DISCARDED;
+        if ((int)d.state != last_state) { last_state = (int)d.state; left_scan = 1; }
+        if (left_scan)
+        {
+            left_scan = 0;
+            left_count = idle ? sh_unfinished( l, left, 6 ) : 0;
+            if (left_selected >= left_count) left_selected = left_count ? left_count - 1 : 0;
+            if (left_count) launcher_log( "[SHELL] Downloads: %d unfinished on the card, the first is app %u", left_count, left[0] );
+            /* Their names, and Continue at once, need the account. */
+            if (left_count && !steam_ui_online()) steam_ui_autoresume( l->options->runtime_dir );
+        }
+        /* Continue was asked for before Steam was signed in. */
+        if (wait_app)
+        {
+            if (!idle) wait_app = 0;
+            else if (steam_ui_online())
+            {
+                sh_read_owned( l, 0 );
+                if (steam_ui_resume( wait_app )) wait_app = 0;
+            }
+            if (wait_app && now - wait_since > 40000)
+            {
+                wait_app = 0;
+                ui_toast( ui, "Could not continue: there is no connection to Steam. Sign in under Maintenance, Steam account.", 5000 );
+            }
+        }
+        else if (idle && left_count && steam_ui_online()) sh_read_owned( l, 0 );
         can_continue = !active && d.app_id && (d.state == STEAM_DOWNLOAD_ERROR || d.state == STEAM_DOWNLOAD_CANCELLED);
         /* The same failure again with nothing more verified: Continue is of no
          * more use, so the choice is put once by itself and then on the button. */
@@ -1711,6 +2143,42 @@ static void sh_downloads( struct launcher *l )
                     if (!steam_ui_resume( d.app_id ))
                         ui_toast( ui, "Could not continue: there is no connection to Steam, or another operation is running.", 4000 );
                 }
+                else if (idle && left_count && !wait_app)
+                {
+                    ui_sound( ui, LAUNCHER_SOUND_ACCEPT );
+                    launcher_log( "[SHELL] Downloads: continue the unfinished download of app %u (Steam %s)", left[left_selected],
+                                  steam_ui_online() ? "online" : "not signed in yet" );
+                    if (!steam_ui_online() || !steam_ui_resume( left[left_selected] ))
+                    {
+                        steam_ui_autoresume( l->options->runtime_dir );
+                        wait_app = left[left_selected];
+                        wait_since = now;
+                        ui_toast( ui, "Connecting to Steam; the download then continues", 4000 );
+                    }
+                }
+                break;
+            case UI_UP: if (idle && left_selected > 0) left_selected--; break;
+            case UI_DOWN: if (idle && left_selected + 1 < left_count) left_selected++; break;
+            case UI_X:
+                if (idle && left_count && !wait_app)
+                {
+                    char name[64], question[400];
+                    unsigned int app = left[left_selected], fs_error = 0;
+
+                    snprintf( question, sizeof(question),
+                              sh_tr( "What was downloaded of \"%s\" is deleted from the card. The game can be installed again from its page." ),
+                              sh_unfinished_name( app, name, sizeof(name) ) );
+                    if (ui_confirm( ui, sh_tr( "Delete the unfinished download" ), question, sh_tr( "Delete" ) ))
+                    {
+                        if (steam_ui_busy( app ) || steam_storage_discard( l->options->runtime_dir, app, &fs_error ))
+                            ui_toast( ui, "The unfinished download could not be deleted", 4000 );
+                        else ui_toast( ui, "The unfinished download is deleted", 3000 );
+                        launcher_log( "[SHELL] Downloads: the unfinished download of app %u deleted, errno %u", app, fs_error );
+                        steam_ui_forget_install( app );
+                        left_scan = 1;
+                    }
+                    ui_start_screen( ui );
+                }
                 break;
             default: break;
             }
@@ -1725,7 +2193,7 @@ static void sh_downloads( struct launcher *l )
 
             asked_app = d.app_id;
             asked_attempts = d.attempts;
-            snprintf( title, sizeof(title), sh_tr( "Error %u: the download cannot be continued" ), d.error );
+            snprintf( title, sizeof(title), sh_tr( "The download stopped: error %u" ), d.error );
             launcher_log( "[SHELL] Downloads: app %u failed %u times in a row with error %u (stage %u, depot %u, file \"%s\"); asking what to do",
                           d.app_id, d.attempts, d.error, d.failed_stage, d.depot_id, d.file );
             chosen = ui_menu( ui, title, items, 3, 0 );
@@ -1748,7 +2216,26 @@ static void sh_downloads( struct launcher *l )
         sh_frame_begin( l );
         sh_top( l, sh_tr( "Downloads" ), NULL );
         y = SH_TOP + 36;
-        if (!d.app_id || d.state == STEAM_DOWNLOAD_IDLE)
+        if (idle && left_count)
+        {
+            ui_text( ui, ui->small, x, y - 6, sh_tr( "UNFINISHED DOWNLOADS" ), ui->dim );
+            y += TTF_FontHeight( ui->small ) + 8;
+            for (i = 0; i < left_count; i++, y += 84)
+            {
+                char name[64];
+
+                ui_rounded( ui, x, y, w, 72, 8, SH_PANEL );
+                if (i == left_selected) sh_focus_ring( ui, x, y, w, 72, 8 );
+                sh_fit( ui, ui->normal, x + 28, y + 20, w - 56 - 420, sh_unfinished_name( left[i], name, sizeof(name) ), ui->value, 0 );
+                ui_text_right( ui, ui->small, x + w - 28, y + 24,
+                               sh_tr( wait_app == left[i] ? "Connecting to Steam..." : "Stopped; what was downloaded is on the card" ),
+                               wait_app == left[i] ? SH_BLUE : SH_AMBER );
+            }
+            ui_text_wrapped( ui, ui->small, x, y + 4, w, 2,
+                             "Continue checks what is on the card and downloads the rest. It needs the Steam account to be signed in.",
+                             ui->dim, 0 );
+        }
+        else if (idle)
         {
             ui_rounded( ui, x, y, w, 200, 8, SH_PANEL );
             ui_text( ui, ui->large, x + 32, y + 52, sh_tr( "Nothing is downloading" ), ui->value );
@@ -1825,10 +2312,15 @@ static void sh_downloads( struct launcher *l )
         if (active) hints[hint_count++] = (struct ui_hint){ UI_A, "Cancel the download" };
         else if (stuck) hints[hint_count++] = (struct ui_hint){ UI_A, "Start over or cancel" };
         else if (can_continue) hints[hint_count++] = (struct ui_hint){ UI_A, "Continue" };
+        else if (idle && left_count)
+        {
+            hints[hint_count++] = (struct ui_hint){ UI_X, "Delete" };
+            hints[hint_count++] = (struct ui_hint){ UI_A, "Continue" };
+        }
         hints[hint_count++] = (struct ui_hint){ UI_B, "Back" };
         ui_hints_right( ui, hints, hint_count, ui->width - SH_MARGIN, UI_FOOTER_Y - 6 );
         ui_draw_toast( ui );
-        ui->busy_until = now + (active ? 300 : 1000);   /* a transfer may start while this is open */
+        ui->busy_until = now + (active || wait_app ? 300 : 1000);   /* a transfer may start while this is open */
         ui_present( ui );
         ui_wait( ui );
     }
@@ -1863,7 +2355,11 @@ static void sh_maintenance( struct launcher *l )
         snprintf( rows[6].value, sizeof(rows[6].value), "%s",
                   launcher_kv_get( &l->look, "steamgriddb-key", text, sizeof(text) ) && text[0] ? "Set" : "Not set" );
         rows[6].help = "The key that lets covers be downloaded for programs that are not from Steam.";
-        snprintf( rows[7].label, sizeof(rows[7].label), "About and credits" );
+        /* The version is told here, where it is always in sight: the build's full
+         * name is in Diagnostics, which only developer mode shows. */
+        snprintf( rows[7].label, sizeof(rows[7].label), "About CorkDeck" );
+        snprintf( rows[7].value, sizeof(rows[7].value), "%s", sh_tr( "Version " CORKDECK_VERSION ) );
+        rows[7].help = "The version of this application and the people and projects it is made of.";
         chosen = sh_rows( l, "Maintenance", "Components and system", rows, 8, &selection );
         if (chosen < 0) return;
         if (chosen == 0) launcher_dlls_open( l->dlls );
@@ -1891,57 +2387,388 @@ static void sh_maintenance( struct launcher *l )
     }
 }
 
-static void sh_storage( struct launcher *l )
+/***********************************************************************
+ * Storage: what each game takes on the card
+ *
+ * One row for each folder a game is in, the largest first, with where it came
+ * from. A Steam installation says its size in the installer's marker (builds
+ * from 0.2c write it there); any other folder is counted once, on a thread of
+ * its own, and the count is kept in corkdeck/sizes.txt so that it is not made
+ * again. Y counts everything anew. A opens the game's page, where Manage
+ * deletes it from the card.
+ */
+
+#define SH_STORE_ROWS 96
+
+struct sh_store_row
 {
-    struct sh_row rows[12];
-    struct wine_nx_launcher_usb_volume volumes[LAUNCHER_MAX_USB_VOLUMES];
-    struct statvfs vfs;
-    int selection = 0, count = 0, i, n, local = 0, steam = 0, missing = 0;
+    char folder[512];
+    int program;                 /* the first entry of the library in that folder */
+    int source;                  /* 0 local, 1 Steam, 2 USB, 3 unfinished downloads */
+    int shared;                  /* the folder holds other things: no size is given */
+    int counted;                 /* 1 from the marker or the kept counts, 2 by the thread just now */
+    unsigned long long bytes;
+    SDL_atomic_t done;           /* the thread: 1 counted, 2 could not be */
+    unsigned long long thread_bytes;
+};
 
-    memset( rows, 0, sizeof(rows) );
-    for (i = 0; i < l->program_count; i++)
-    {
-        if (l->programs[i].removed) continue;
-        if (l->programs[i].missing) missing++;
-        else if (sh_is_steam( l, i )) steam++;
-        else local++;
-    }
-    snprintf( rows[count].label, sizeof(rows[0].label), "SD card" );
-    if (!statvfs( LAUNCHER_DRIVE_C, &vfs ))
-        snprintf( rows[count].value, sizeof(rows[0].value), sh_tr( "%.1f GB free of %.1f GB" ),
-                  (double)vfs.f_bavail * vfs.f_frsize / 1073741824.0, (double)vfs.f_blocks * vfs.f_frsize / 1073741824.0 );
-    else snprintf( rows[count].value, sizeof(rows[0].value), "no data" );
-    count++;
-    n = l->options->list_usb ? l->options->list_usb( volumes, LAUNCHER_MAX_USB_VOLUMES ) : 0;
-    for (i = 0; i < n && count < 8; i++, count++)
-    {
-        snprintf( rows[count].label, sizeof(rows[0].label), "USB %c: %s", volumes[i].drive, volumes[i].label );
-        if (!statvfs( volumes[i].path, &vfs ))
-            snprintf( rows[count].value, sizeof(rows[0].value), sh_tr( "%.1f GB free of %.1f GB" ),
-                      (double)vfs.f_bavail * vfs.f_frsize / 1073741824.0, (double)vfs.f_blocks * vfs.f_frsize / 1073741824.0 );
-        else snprintf( rows[count].value, sizeof(rows[0].value), "no data" );
-    }
-    snprintf( rows[count].label, sizeof(rows[0].label), "Steam installations in the library" );
-    snprintf( rows[count++].value, sizeof(rows[0].value), "%d", steam );
-    snprintf( rows[count].label, sizeof(rows[0].label), "Local programs in the library" );
-    snprintf( rows[count++].value, sizeof(rows[0].value), "%d", local );
-    snprintf( rows[count].label, sizeof(rows[0].label), "Entries whose file is missing" );
-    snprintf( rows[count].value, sizeof(rows[0].value), "%d", missing );
-    rows[count++].tone = missing ? UI_VALUE_DANGER : UI_VALUE_NORMAL;
-    snprintf( rows[count].label, sizeof(rows[0].label), "Hide entries whose file is missing" );
-    snprintf( rows[count++].value, sizeof(rows[0].value), "%s", l->hide_missing ? "On" : "Off" );
-    for (;;)
-    {
-        int chosen = sh_rows( l, "Storage", NULL, rows, count, &selection );
+static struct
+{
+    struct sh_store_row rows[SH_STORE_ROWS];
+    int count, order[SH_STORE_ROWS];
+    SDL_Thread *thread;
+    SDL_atomic_t stop, at;
+} sh_store;
 
-        if (chosen < 0) return;
-        if (chosen == count - 1)
+static int sh_store_tree( const char *path, int depth, unsigned long long *bytes )
+{
+    char child[1024];
+    struct dirent *entry;
+    struct stat st;
+    DIR *dir;
+    int ok = 1;
+
+    if (SDL_AtomicGet( &sh_store.stop ) || depth > 32 || lstat( path, &st )) return 0;
+    if (!S_ISDIR( st.st_mode )) { *bytes += (unsigned long long)st.st_size; return 1; }
+    if (!(dir = opendir( path ))) return 0;
+    while (ok && (entry = readdir( dir )))
+    {
+        if (!strcmp( entry->d_name, "." ) || !strcmp( entry->d_name, ".." )) continue;
+        if (snprintf( child, sizeof(child), "%s/%s", path, entry->d_name ) >= (int)sizeof(child)) continue;
+        ok = sh_store_tree( child, depth + 1, bytes );
+    }
+    closedir( dir );
+    return ok;
+}
+
+static int sh_store_worker( void *unused )
+{
+    int i;
+
+    (void)unused;
+    for (i = 0; i < sh_store.count && !SDL_AtomicGet( &sh_store.stop ); i++)
+    {
+        struct sh_store_row *row = &sh_store.rows[i];
+        unsigned long long bytes = 0;
+
+        if (row->counted || row->shared) continue;
+        SDL_AtomicSet( &sh_store.at, i );
+        if (sh_store_tree( row->folder, 0, &bytes ))
         {
-            l->hide_missing = !l->hide_missing;
-            snprintf( rows[count - 1].value, sizeof(rows[0].value), "%s", l->hide_missing ? "On" : "Off" );
-            save_look( l );
+            row->thread_bytes = bytes;
+            SDL_AtomicSet( &row->done, 1 );
+        }
+        else if (!SDL_AtomicGet( &sh_store.stop )) SDL_AtomicSet( &row->done, 2 );
+    }
+    SDL_AtomicSet( &sh_store.at, -1 );
+    return 0;
+}
+
+static void sh_store_stop(void)
+{
+    if (!sh_store.thread) return;
+    SDL_AtomicSet( &sh_store.stop, 1 );
+    SDL_WaitThread( sh_store.thread, NULL );
+    sh_store.thread = NULL;
+    SDL_AtomicSet( &sh_store.stop, 0 );
+}
+
+/* The counts kept from before: "bytes<TAB>folder" a line. */
+static void sh_store_kept( struct launcher *l, int write )
+{
+    char path[600], line[700];
+    FILE *file;
+    int i;
+
+    runtime_file( l, "corkdeck/sizes.txt", path, sizeof(path) );
+    if (write)
+    {
+        if (!(file = fopen( path, "wb" ))) return;
+        for (i = 0; i < sh_store.count; i++)
+            if (sh_store.rows[i].counted && !sh_store.rows[i].shared && sh_store.rows[i].source != 3)
+                fprintf( file, "%llu\t%s\n", sh_store.rows[i].bytes, sh_store.rows[i].folder );
+        fclose( file );
+        return;
+    }
+    if (!(file = fopen( path, "rb" ))) return;
+    while (fgets( line, sizeof(line), file ))
+    {
+        char *tab = strchr( line, '\t' );
+
+        if (!tab) continue;
+        tab[strcspn( tab, "\r\n" )] = 0;
+        for (i = 0; i < sh_store.count; i++)
+            if (!sh_store.rows[i].counted && !strcmp( sh_store.rows[i].folder, tab + 1 ))
+            {
+                sh_store.rows[i].bytes = strtoull( line, NULL, 10 );
+                sh_store.rows[i].counted = 1;
+            }
+    }
+    fclose( file );
+}
+
+static int sh_store_compare( const void *a, const void *b )
+{
+    const struct sh_store_row *x = &sh_store.rows[*(const int *)a], *y = &sh_store.rows[*(const int *)b];
+
+    if (x->counted && y->counted && x->bytes != y->bytes) return x->bytes < y->bytes ? 1 : -1;
+    if (!x->counted != !y->counted) return x->counted ? -1 : 1;
+    return *(const int *)a - *(const int *)b;
+}
+
+/* The rows as the library and the card are now. recount: forget what was kept. */
+static void sh_store_build( struct launcher *l, int recount )
+{
+    char folder[512], other[128], path[600], line[128];
+    int i, j;
+
+    sh_store_stop();
+    memset( sh_store.rows, 0, sizeof(sh_store.rows) );
+    sh_store.count = 0;
+    for (i = 0; i < l->program_count && sh_store.count < SH_STORE_ROWS - 1; i++)
+    {
+        struct program *p = &l->programs[i];
+        struct sh_store_row *row;
+        int steam;
+
+        if (p->removed || p->missing) continue;
+        steam = sh_steam_folder( l, i, folder, sizeof(folder) );
+        if (!steam)
+        {
+            snprintf( folder, sizeof(folder), "%s", p->path );
+            parent_dir( folder );
+        }
+        for (j = 0; j < sh_store.count; j++) if (!strcmp( sh_store.rows[j].folder, folder )) break;
+        if (j < sh_store.count) continue;
+        row = &sh_store.rows[sh_store.count++];
+        snprintf( row->folder, sizeof(row->folder), "%s", folder );
+        row->program = i;
+        row->source = steam ? 1 : usb_program_path( p->path ) ? 2 : 0;
+        if (!steam)
+        {
+            /* Another entry in the same folder is the same game's; anything else makes the folder no game's own. */
+            const char *why = sh_folder_shared( l, i, folder, other, sizeof(other) );
+
+            row->shared = why && !other[0];
+        }
+        else if (!recount)
+        {
+            FILE *file;
+
+            snprintf( path, sizeof(path), "%s/autorun-steam-install.ini", folder );
+            if ((file = fopen( path, "rb" )))
+            {
+                while (fgets( line, sizeof(line), file ))
+                    if (!strncmp( line, "size=", 5 ) && (row->bytes = strtoull( line + 5, NULL, 10 ))) row->counted = 1;
+                fclose( file );
+            }
         }
     }
+    /* What downloads left unfinished, as one row. */
+    runtime_file( l, "steam/staging", path, sizeof(path) );
+    if (directory_exists( path ))
+    {
+        struct sh_store_row *row = &sh_store.rows[sh_store.count++];
+
+        snprintf( row->folder, sizeof(row->folder), "%s", path );
+        row->program = -1;
+        row->source = 3;
+    }
+    if (!recount) sh_store_kept( l, 0 );
+    for (i = 0; i < sh_store.count; i++) sh_store.order[i] = i;
+    qsort( sh_store.order, sh_store.count, sizeof(sh_store.order[0]), sh_store_compare );
+    SDL_AtomicSet( &sh_store.at, -1 );
+    for (i = 0; i < sh_store.count; i++)
+        if (!sh_store.rows[i].counted && !sh_store.rows[i].shared)
+        {
+            sh_store.thread = SDL_CreateThreadWithStackSize( sh_store_worker, "corkdeck-sizes", 256 * 1024, NULL );
+            break;
+        }
+}
+
+/* Once a frame: takes what the thread counted. Returns 1 when a row changed. */
+static int sh_store_pump( struct launcher *l )
+{
+    int i, changed = 0, pending = 0;
+
+    for (i = 0; i < sh_store.count; i++)
+    {
+        struct sh_store_row *row = &sh_store.rows[i];
+        int done = SDL_AtomicGet( &row->done );
+
+        if (row->counted || row->shared) continue;
+        if (done == 1) { row->bytes = row->thread_bytes; row->counted = 2; changed = 1; }
+        else if (done == 2) { row->shared = 2; changed = 1; }
+        else pending = 1;
+    }
+    if (changed)
+    {
+        qsort( sh_store.order, sh_store.count, sizeof(sh_store.order[0]), sh_store_compare );
+        if (!pending) sh_store_kept( l, 1 );
+    }
+    if (!pending && sh_store.thread) { SDL_WaitThread( sh_store.thread, NULL ); sh_store.thread = NULL; }
+    return changed;
+}
+
+/* Returns 1 with target set when a program is to start. */
+static int sh_storage( struct launcher *l, char *target, size_t size )
+{
+    struct ui *ui = &l->ui;
+    struct ui_input input;
+    struct wine_nx_launcher_usb_volume volumes[LAUNCHER_MAX_USB_VOLUMES];
+    struct statvfs vfs;
+    unsigned long long card_free = 0, card_total = 0;
+    int selection = 0, top = 0, card_known, usb_count, i, missing = 0;
+    const int visible = 6, row_h = 62;
+
+    launcher_log( "[SHELL] Storage" );
+    sh_store_build( l, 0 );
+    card_known = !statvfs( LAUNCHER_DRIVE_C, &vfs );
+    if (card_known)
+    {
+        card_free = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+        card_total = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
+    }
+    usb_count = l->options->list_usb ? l->options->list_usb( volumes, LAUNCHER_MAX_USB_VOLUMES ) : 0;
+    for (i = 0; i < l->program_count; i++) missing += !l->programs[i].removed && l->programs[i].missing;
+    ui_start_screen( ui );
+    while (ui_begin_frame( ui ))
+    {
+        static const struct ui_hint hints[] = { { UI_Y, "Count again" }, { UI_X, "Missing entries" }, { UI_B, "Back" }, { UI_A, "Open" } };
+        unsigned long long games = 0;
+        char text[240], a[40], b[40];
+        int x = SH_MARGIN, w = ui->width - 2 * SH_MARGIN, y, counting = 0, at = SDL_AtomicGet( &sh_store.at );
+
+        sh_store_pump( l );
+        while (ui_poll( ui, &input ))
+        {
+            switch (input.button)
+            {
+            case UI_MINUS:
+            case UI_PLUS:
+                sh_global_key( l, input.button );
+                if (sh.pending >= 0) { sh_store_stop(); return 0; }
+                break;
+            case UI_B: ui_sound( ui, LAUNCHER_SOUND_BACK ); sh_store_stop(); ui_start_screen( ui ); return 0;
+            case UI_UP: if (selection > 0) selection--; break;
+            case UI_DOWN: if (selection + 1 < sh_store.count) selection++; break;
+            case UI_Y:
+                ui_sound( ui, LAUNCHER_SOUND_ACCEPT );
+                sh_store_build( l, 1 );
+                ui_toast( ui, "Counting every folder again", 2500 );
+                break;
+            case UI_X:
+                l->hide_missing = !l->hide_missing;
+                save_look( l );
+                ui_toast( ui, l->hide_missing ? "Entries whose file is missing are hidden from the library"
+                                              : "Entries whose file is missing are shown in the library", 3000 );
+                break;
+            case UI_A:
+                if (selection < sh_store.count && sh_store.rows[sh_store.order[selection]].program >= 0)
+                {
+                    int program = sh_store.rows[sh_store.order[selection]].program;
+
+                    ui_sound( ui, LAUNCHER_SOUND_ACCEPT );
+                    sh_store_stop();
+                    if (sh_app_page( l, program, target, size )) return 1;
+                    if (sh.pending >= 0) return 0;
+                    rebuild_lists( l, -1 );
+                    sh_store_build( l, 0 );
+                    if (card_known && !statvfs( LAUNCHER_DRIVE_C, &vfs )) card_free = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+                    if (selection >= sh_store.count) selection = sh_store.count ? sh_store.count - 1 : 0;
+                    ui_start_screen( ui );
+                }
+                else if (selection < sh_store.count) { sh_store_stop(); sh.pending = PAGE_DOWNLOADS; return 0; }
+                break;
+            default: break;
+            }
+        }
+        if (!ui->running) { sh_store_stop(); return 0; }
+        if (selection < top) top = selection;
+        if (selection >= top + visible) top = selection - visible + 1;
+        for (i = 0; i < sh_store.count; i++)
+        {
+            if (sh_store.rows[i].counted && sh_store.rows[i].source != 2) games += sh_store.rows[i].bytes;
+            else if (!sh_store.rows[i].shared) counting++;
+        }
+
+        sh_frame_begin( l );
+        sh_top( l, sh_tr( "Storage" ), NULL );
+        y = SH_TOP + 24;
+        /* The card: what the games take of it, what everything else does, what is free. */
+        ui_rounded( ui, x, y, w, 104, 8, SH_PANEL );
+        ui_text( ui, ui->normal, x + 28, y + 16, sh_tr( "SD card" ), ui->value );
+        if (card_known && card_total)
+        {
+            unsigned long long used = card_total - card_free, rest = used > games ? used - games : 0;
+            int bar_x = x + 28, bar_w = w - 56, bar_y = y + 16 + TTF_FontHeight( ui->normal ) + 10;
+            int games_w = (int)((double)games / card_total * bar_w), rest_w = (int)((double)rest / card_total * bar_w);
+
+            snprintf( text, sizeof(text), sh_tr( "%s free of %s" ), sh_bytes( card_free, a, sizeof(a) ), sh_bytes( card_total, b, sizeof(b) ) );
+            ui_text_right( ui, ui->normal, x + w - 28, y + 16, text, ui->value );
+            ui_rounded( ui, bar_x, bar_y, bar_w, 12, 4, (SDL_Color){ 44, 58, 75, 255 } );
+            if (rest_w + games_w > 0) ui_rounded( ui, bar_x, bar_y, games_w + rest_w, 12, 4, (SDL_Color){ 110, 124, 142, 255 } );
+            if (games_w > 0) ui_rounded( ui, bar_x, bar_y, games_w < 6 ? 6 : games_w, 12, 4, SH_BLUE );
+            snprintf( text, sizeof(text), sh_tr( counting ? "Games here: %s, still counting  ·  everything else on the card: %s"
+                                                          : "Games here: %s  ·  everything else on the card: %s" ),
+                      sh_bytes( games, a, sizeof(a) ), sh_bytes( rest, b, sizeof(b) ) );
+            sh_fit( ui, ui->small, bar_x, bar_y + 20, bar_w, text, ui->dim, 0 );
+        }
+        else ui_text_right( ui, ui->normal, x + w - 28, y + 16, sh_tr( "no data" ), ui->dim );
+        y += 104 + 10;
+        for (i = 0; i < usb_count && i < 1; i++)
+        {
+            snprintf( text, sizeof(text), "USB %c: %s", volumes[i].drive, volumes[i].label );
+            ui_text( ui, ui->small, x + 28, y, text, ui->dim );
+            if (!statvfs( volumes[i].path, &vfs ))
+            {
+                snprintf( text, sizeof(text), sh_tr( "%s free of %s" ),
+                          sh_bytes( (unsigned long long)vfs.f_bavail * vfs.f_frsize, a, sizeof(a) ),
+                          sh_bytes( (unsigned long long)vfs.f_blocks * vfs.f_frsize, b, sizeof(b) ) );
+                ui_text_right( ui, ui->small, x + w - 28, y, text, ui->dim );
+            }
+            y += TTF_FontHeight( ui->small ) + 8;
+        }
+
+        if (!sh_store.count)
+            ui_text( ui, ui->normal, x + 28, y + 30, sh_tr( "No games on the card yet" ), ui->dim );
+        for (i = top; i < sh_store.count && i < top + visible; i++, y += row_h)
+        {
+            const struct sh_store_row *row = &sh_store.rows[sh_store.order[i]];
+            const char *source = row->source == 1 ? "Steam" : row->source == 2 ? "USB" : sh_tr( "Local" );
+            const char *name = row->program >= 0 ? l->programs[row->program].title : sh_tr( "Unfinished downloads" );
+            SDL_Color tone = ui->value;
+            int right = x + w - 28;
+
+            ui_rounded( ui, x, y, w, row_h - 8, 8, SH_PANEL );
+            if (i == selection) sh_focus_ring( ui, x, y, w, row_h - 8, 8 );
+            if (row->counted) sh_bytes( row->bytes, text, sizeof(text) );
+            else if (row->shared == 1) { snprintf( text, sizeof(text), "%s", sh_tr( "in a shared folder" ) ); tone = ui->dim; }
+            else if (row->shared) { snprintf( text, sizeof(text), "%s", sh_tr( "could not be counted" ) ); tone = SH_AMBER; }
+            else { snprintf( text, sizeof(text), "%s", sh_tr( sh_store.order[i] == at ? "counting..." : "waiting to be counted" ) ); tone = ui->dim; }
+            ui_text_right( ui, ui->normal, right, y + (row_h - 8 - TTF_FontHeight( ui->normal )) / 2, text, tone );
+            if (row->source != 3)
+                sh_chip( ui, x + 20, y + (row_h - 8 - TTF_FontHeight( ui->small ) - 8) / 2, source, row->source == 1 ? SH_GREEN : ui->dim );
+            sh_fit( ui, ui->normal, x + 160, y + (row_h - 8 - TTF_FontHeight( ui->normal )) / 2, w - 160 - 300, name, ui->value, 0 );
+        }
+        if (sh_store.count > visible)
+        {
+            snprintf( text, sizeof(text), "%d / %d", selection + 1, sh_store.count );
+            ui_text( ui, ui->small, x, UI_FOOTER_Y - 2, text, ui->dim );
+        }
+        else if (missing)
+        {
+            snprintf( text, sizeof(text), sh_tr( "Entries whose file is missing: %d" ), missing );
+            ui_text( ui, ui->small, x, UI_FOOTER_Y - 2, text, SH_AMBER );
+        }
+        ui_hints_right( ui, hints, 4, ui->width - SH_MARGIN, UI_FOOTER_Y - 6 );
+        ui_draw_toast( ui );
+        ui->busy_until = SDL_GetTicks() + (sh_store.thread ? 250 : 1000);
+        ui_present( ui );
+        ui_wait( ui );
+    }
+    sh_store_stop();
+    return 0;
 }
 
 static void sh_text_file( struct launcher *l, const char *title, const char *path, const char *empty )
@@ -2051,7 +2878,7 @@ static int sh_main_menu( struct launcher *l )
                                                    "Diagnostics", "Power" };
     struct ui *ui = &l->ui;
     struct ui_input input;
-    int focus = sh.page, i;
+    int focus = sh.page == PAGE_DIAGNOSTICS && !sh.developer ? PAGE_HOME : sh.page, i;
     Uint32 opened = SDL_GetTicks();
 
     while (ui_begin_frame( ui ))
@@ -2068,8 +2895,8 @@ static int sh_main_menu( struct launcher *l )
                 if (code >= 3000) { focus = code - 3000; input.button = UI_A; }
                 else input.button = UI_B;
             }
-            if (input.button == UI_UP && focus > 0) focus--;
-            if (input.button == UI_DOWN && focus + 1 < PAGE_COUNT) focus++;
+            if (input.button == UI_UP && focus > 0) focus -= focus - 1 == PAGE_DIAGNOSTICS && !sh.developer ? 2 : 1;
+            if (input.button == UI_DOWN && focus + 1 < PAGE_COUNT) focus += focus + 1 == PAGE_DIAGNOSTICS && !sh.developer ? 2 : 1;
             if (input.button == UI_A) { ui_sound( ui, LAUNCHER_SOUND_ACCEPT ); return focus; }
             if (input.button == UI_B || input.button == UI_MINUS) { ui_sound( ui, LAUNCHER_SOUND_BACK ); return -1; }
             if (!ui->running) return -1;
@@ -2086,6 +2913,7 @@ static int sh_main_menu( struct launcher *l )
         ui_text( ui, ui->normal, x + 60, 42 - TTF_FontHeight( ui->normal ) / 2, "CorkDeck", ui->value );
         for (i = 0, y = 100; i < PAGE_COUNT; i++, y += 56)
         {
+            if (i == PAGE_DIAGNOSTICS && !sh.developer) { y -= 56; continue; }
             if (i == PAGE_POWER) y = ui->height - 90;
             if (i == focus) ui_rounded( ui, x + 20, y, w - 40, 48, 8, SH_BLUE );
             ui_text( ui, ui->normal, x + 38, y + (48 - TTF_FontHeight( ui->normal )) / 2, names[i],
@@ -2664,6 +3492,22 @@ static int shell_run( struct launcher *l, char *target, size_t size )
     sh.zone = 1;
     sh.sort = SORT_RECENT;
     sh_card_probe( l, "start" );
+    {
+        /* Builds 0.1.8b to 0.2b could give a program an overclocking profile, written into
+         * Horizon OC as this application's own. CorkDeck sets no clocks now and does not
+         * touch Horizon OC even to take that back: it says so once and leaves it to the owner. */
+        char mark[600];
+
+        runtime_file( l, "corkdeck/clock-profile.txt", mark, sizeof(mark) );
+        if (file_exists( mark ))
+        {
+            launcher_log( "[SHELL] an overclocking profile of an earlier build may still be in Horizon OC; telling the owner once" );
+            ui_message( ui, sh_tr( "Overclocking" ),
+                        sh_tr( "An earlier CorkDeck could set an overclocking profile for a game, and one may still be stored in Horizon OC for the application CorkDeck. CorkDeck no longer changes the console's clocks at all. To be sure only your own profile applies, open the Horizon OC overlay and reset the profile of the application CorkDeck." ) );
+            remove( mark );
+            ui_start_screen( ui );
+        }
+    }
     sh_rebuild( l, -1 );
     sh_card_probe( l, "after the lists" );
     ui_start_screen( ui );
@@ -2824,7 +3668,7 @@ static int shell_run( struct launcher *l, char *target, size_t size )
                 else if (destination == PAGE_DOWNLOADS) sh_downloads( l );
                 else if (destination == PAGE_SETTINGS) sh_settings_screen( l, NULL );
                 else if (destination == PAGE_MAINTENANCE) sh_maintenance( l );
-                else if (destination == PAGE_STORAGE) sh_storage( l );
+                else if (destination == PAGE_STORAGE && sh_storage( l, target, size )) { sh_art_stop(); ui->global_key = NULL; return 1; }
                 else if (destination == PAGE_DIAGNOSTICS) sh_diagnostics( l );
                 else if (destination == PAGE_POWER && sh_power( l )) { sh_art_stop(); ui->global_key = NULL; return 0; }
                 rebuild_lists( l, -1 );

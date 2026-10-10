@@ -311,8 +311,11 @@ typedef struct { struct { uint64_t x; } pc; uint64_t sp, lr; } ThreadContext;
 enum { ThreadActivity_Paused, ThreadActivity_Runnable };
 static struct { Handle handle; unsigned tid; char kind; } registry[] = {{1, 4, 'w'}, {2, 8, 's'}};
 static pthread_mutex_t profile_mutex = PTHREAD_MUTEX_INITIALIZER;
-static unsigned names, logs, paused;
+static unsigned names, logs, paused, passive;
 static int failure;
+/* With snapshots off nothing is paused: only the waits the threads noted themselves are told. */
+static int wine_nx_stall_snapshots_enabled = 1;
+static void pending_wait_report(void) { assert(!paused); passive++; }
 static Handle threadGetCurHandle(void) { return 99; }
 static unsigned wine_nx_threads_other(void) { return 2; }
 static Result svcSetThreadActivity(Handle handle, int activity) {
@@ -350,7 +353,11 @@ int main(void) {
         assert(!paused && !pthread_mutex_trylock(&profile_mutex));
         pthread_mutex_unlock(&profile_mutex);
     }
-    assert(names == 4 && logs == 5);
+    assert(names == 4 && logs == 5 && !passive);
+    wine_nx_stall_snapshots_enabled = 0;
+    failure = 0;
+    wine_nx_threads_report_stalled();
+    assert(names == 4 && logs == 6 && passive == 1 && !paused);
 }
 '''
 

@@ -1,8 +1,9 @@
 #!/bin/sh
-# Host run of the launcher with SDL's dummy video driver: builds it with ASan,
-# stages the programs of a built card as symlinks under "sdmc:", drives the
-# screens with tests/launcher_host.c's script and checks what it wrote and
-# returned. Screenshots go to $LAUNCHER_SHOTS when it is set.
+# Host run of the launcher with SDL's dummy video driver: builds it with ASan
+# and every warning an error, stages the programs of a built card as symlinks
+# under "sdmc:", drives CorkDeck's shell with tests/launcher_host.c's script and
+# checks what it wrote and returned. Screenshots go to $LAUNCHER_SHOTS when it
+# is set.
 # Needs Homebrew's sdl2 (sdl2-compat), sdl3, sdl2_ttf and libpng.
 set -eu
 export SDL_AUDIODRIVER=dummy
@@ -59,29 +60,27 @@ clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-
     $(sdl2-config --libs) -L/opt/homebrew/lib -lpng -lturbojpeg -o "$build/launcher_image"
 "$build/launcher_image" "$horizon_wine/assets/logo.png" "$horizon_wine/assets/autorun.jpg"
 
-python3 "$horizon_wine/tools/make-embed.py" "$build/forwarder-icon.c" wine_nx_icon_any "$horizon_wine/assets/autorun.jpg"
+
+python3 "$horizon_wine/tools/make-embed.py" "$build/forwarder-icon.c" wine_nx_icon_any "$horizon_wine/assets/autorun.jpg" \
+    corkdeck_font "$horizon_wine/assets/fonts/Manrope-SemiBold.ttf"
+# Everything the shell is made of, except what tests/launcher_host.c stands in
+# for (the DLL manager's screens and the platform): the list tests/shell-stand.sh
+# builds for pictures, here with the sanitizers and no warning let through.
+sources="$horizon_wine/tests/launcher_host.c $build/forwarder-icon.c $horizon_wine/vendor/qrcodegen/qrcodegen.c $horizon_wine/source/diagnostics/lan_log.c"
+for name in launcher launcher_catalog launcher_ui launcher_audio launcher_graphics launcher_forwarder \
+            launcher_image launcher_setup setup_boot steamgriddb launcher_svg; do
+    sources="$sources $horizon_wine/source/$name.c"
+done
+for file in "$horizon_wine"/source/steam/*.c "$horizon_wine"/source/app/*.c "$horizon_wine"/source/shell/*.c; do
+    [ -f "$file" ] && sources="$sources $file"
+done
+# shellcheck disable=SC2086
 clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I "$horizon_wine/source" $(sdl2-config --cflags) -I/opt/homebrew/include -I/opt/homebrew/opt/openssl/include \
-    "$horizon_wine/tests/launcher_host.c" "$horizon_wine/source/launcher.c" "$horizon_wine/source/launcher_catalog.c" "$horizon_wine/source/launcher_ui.c" "$horizon_wine/source/launcher_audio.c" \
-    "$horizon_wine/source/launcher_graphics.c" "$horizon_wine/source/launcher_forwarder.c" "$horizon_wine/source/launcher_image.c" \
-    "$horizon_wine/source/launcher_setup.c" "$horizon_wine/source/setup_boot.c" \
-    "$horizon_wine/source/steamgriddb.c" \
-    "$horizon_wine/source/steam/steam_ui.c" \
-    "$horizon_wine/source/steam/steam_probe.c" \
-    "$horizon_wine/source/steam/steam_directory.c" \
-    "$horizon_wine/source/steam/steam_wire.c" "$horizon_wine/source/steam/steam_cm_message.c" \
-    "$horizon_wine/source/steam/steam_auth.c" "$horizon_wine/source/steam/steam_crypto.c" \
-    "$horizon_wine/source/steam/steam_cm.c" "$horizon_wine/source/steam/steam_provider.c" \
-    "$horizon_wine/source/steam/steam_library.c" "$horizon_wine/source/steam/steam_app.c" \
-    "$horizon_wine/source/steam/steam_family.c" "$horizon_wine/source/steam/steam_settings.c" "$horizon_wine/source/steam/steam_session.c" "$horizon_wine/source/steam/steam_device_key.c" \
-    "$horizon_wine/source/steam/steam_backend.c" "$horizon_wine/source/steam/steam_content.c" \
-    "$horizon_wine/source/steam/steam_manifest.c" "$horizon_wine/source/steam/steam_install.c" "$horizon_wine/source/steam/steam_local.c" \
-    "$horizon_wine/source/steam/steam_library_ui.c" \
-    "$horizon_wine/source/launcher_svg.c" \
-    "$build/forwarder-icon.c" \
-    "$horizon_wine/vendor/qrcodegen/qrcodegen.c" $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -lturbojpeg -lcurl -lwslay -lmbedcrypto -lminizip -llzma -lzstd -lz -L/opt/homebrew/opt/openssl/lib -lcrypto -lm -o "$build/launcher_host"
+    $sources $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -lturbojpeg -lcurl -lwslay -lmbedcrypto \
+    -lminizip -llzma -lzstd -lz -L/opt/homebrew/opt/openssl/lib -lcrypto -lpthread -lm -o "$build/launcher_host"
 # sdl2-compat looks for SDL3 next to the program, not in Homebrew's lib folder.
-ln -s /opt/homebrew/lib/libSDL3.0.dylib "$build/libSDL3.dylib"
+[ ! -f /opt/homebrew/lib/libSDL3.0.dylib ] || ln -s /opt/homebrew/lib/libSDL3.0.dylib "$build/libSDL3.dylib"
 
 # The floating keyboard: what its buttons and taps send, and its picture.
 clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -90,250 +89,163 @@ clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-
     $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -o "$build/osk"
 "$build/osk" "$font" "$shots"
 
+
 card="$build/card/sdmc:"
 mkdir -p "$card/switch/wine/drive_c/openttd" "$card/games/deep/er/still"
 ln -s "$notepad" "$card/switch/wine/drive_c/"
 ln -s "$notepad" "$card/switch/wine/drive_c/7zr.exe"
 ln -s "$notepad" "$card/switch/wine/drive_c/openttd/openttd.exe"
 ln -s "$notepad" "$card/games/deep/er/still/Deep.exe"
+catalog="$card/switch/wine/launcher-library-v2.ini"
 
-# + -> Run a program once: the browser's pick starts at once and stays out of
-# the library.
-cat > "$build/once-script.txt" <<SCRIPT
-wait 10
-key plus
-wait 3
-key down
-wait 2
-key a
-wait 3
-key a
-wait 3
-key a
-wait 3
-key a
-wait 5
-SCRIPT
-( cd "$build/card" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/once-script.txt" \
-    > "$build/once-out.txt" 2>&1 ) || { cat "$build/once-out.txt"; exit 1; }
-grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'" "$build/once-out.txt" || {
-    cat "$build/once-out.txt"; exit 1; }
-if [ -f "$card/switch/wine/launcher-library-v2.ini" ] && grep -q '^\[game ' "$card/switch/wine/launcher-library-v2.ini"; then
-    cat "$card/switch/wine/launcher-library-v2.ini"; exit 1
-fi
-rm -f "$card/switch/wine/launcher-library-v2.ini" "$card/switch/wine/target.txt"
-echo "launcher host run: + Run a program once starts it without adding it"
+# One run of the shell: shell NAME FOLDER [arguments of launcher_host]. The
+# script is $build/NAME.txt and what the run said goes to $build/NAME-out.txt.
+shell() {
+    name=$1 folder=$2
+    shift 2
+    ( cd "$folder" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/$name.txt" "$@" \
+        > "$build/$name-out.txt" 2>&1 ) || { cat "$build/$name-out.txt"; exit 1; }
+}
+# said NAME TEXT: the run's output has the line.
+said() {
+    grep -qF -- "$2" "$build/$1-out.txt" || { cat "$build/$1-out.txt"; echo "missing: $2" >&2; exit 1; }
+}
 
-# An empty explicit catalog must stay empty even though drive_c contains several
-# executables. Add OpenTTD through the browser, verify that adding did not launch
-# it, then open its options with Y and start it from there. The browser asks
-# which storage to look in before it shows any folder, so the card is chosen
-# first, then the folder, then the program, then Add in the review.
-cat > "$build/script.txt" <<SCRIPT
-wait 10
+# Programs are added by hand: a card with several of them and no catalog shows
+# an empty library. Library (R), Actions (X), "Add a program from the card",
+# then the browser: the card, the folder, the program, and Add in the review.
+# Adding is not starting.
+cat > "$build/add.txt" <<SCRIPT
+wait 30
 shot $shots/library-empty.png
-key x
-wait 5
-key a
-wait 3
-key a
-wait 3
-key a
-wait 3
-key a
-wait 3
-key a
-wait 5
-shot $shots/library-added.png
-key y
-wait 5
-shot $shots/game-details.png
-key right
-wait 3
-key a
-wait 5
-SCRIPT
-
-cd "$build/card"
-SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/script.txt" > "$build/out.txt" 2>&1 || { cat "$build/out.txt"; exit 1; }
-grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'" "$build/out.txt" || { cat "$build/out.txt"; exit 1; }
-grep -q '^version=3$' "sdmc:/switch/wine/launcher-library-v2.ini"
-grep -q '^path=sdmc:/switch/wine/drive_c/openttd/openttd.exe$' "sdmc:/switch/wine/launcher-library-v2.ini"
-test "$(grep -c '^\[game ' "sdmc:/switch/wine/launcher-library-v2.ini")" -eq 1
-grep -qx "sdmc:/switch/wine/drive_c/openttd/openttd.exe" "sdmc:/switch/wine/target.txt"
-grep "^\[LAUNCHER\]" "$build/out.txt"
-
-# Restart from the saved catalog. Home must show the game that was played and A
-# must start it without importing the other staged EXEs.
-cat > "$build/restart-script.txt" <<SCRIPT
-wait 5
-key a
-wait 3
-key a
-SCRIPT
-SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/restart-script.txt" > "$build/restart-out.txt" 2>&1 || {
-    cat "$build/restart-out.txt"; exit 1;
-}
-grep -q "1 catalog games (1 registered, 1 shown)" "$build/restart-out.txt" || { cat "$build/restart-out.txt"; exit 1; }
-grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'" "$build/restart-out.txt" || {
-    cat "$build/restart-out.txt"; exit 1;
-}
-echo "launcher host run: empty home, explicit add, persistence, details and start passed"
-
-
-# Eight played covers exercise Home's row: animated hit testing, swipe selection,
-# both ends, the header, Y Options, and the square library.
-cat > "$build/carousel-script.txt" <<SCRIPT
-wait 35
-key left
-wait 20
-shot $shots/carousel-first.png
-key right
-key right
-wait 30
-shot $shots/carousel-third.png
-tap 400 250
-wait 30
-shot $shots/carousel-tap.png
-swipe 750 250 450 250
-wait 30
-shot $shots/carousel-swipe.png
-key right
-key right
-key right
-key right
-wait 30
-shot $shots/carousel-last.png
-key up
-wait 10
-shot $shots/carousel-header.png
-key right
-key right
-key right
-key a
-wait 10
-shot $shots/settings.png
-key b
-wait 10
-key left
-key left
-key left
-key down
 key r
-wait 15
-shot $shots/carousel-library.png
-key l
-wait 20
-key y
+wait 12
+key x
 wait 10
-shot $shots/carousel-options.png
 key a
-wait 5
+wait 10
 key a
+wait 8
+key a
+wait 8
+key a
+wait 8
+key a
+wait 12
+shot $shots/library-added.png
 SCRIPT
-SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/carousel-script.txt" --carousel-fixture > "$build/carousel-out.txt" 2>&1 || {
-    cat "$build/carousel-out.txt"; exit 1;
-}
-grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/Vanguard/Game.exe'" "$build/carousel-out.txt" || {
-    cat "$build/carousel-out.txt"; exit 1;
-}
-echo "launcher host run: Home history row, taps, swipes, boundaries, header focus and Y Options passed"
+shell add "$build/card"
+said add "[LAUNCHER] 0 catalog games (0 registered, 0 shown)"
+said add "[LAUNCHER] Added sdmc:/switch/wine/drive_c/openttd/openttd.exe to the library"
+said add "launcher returned 0 target ''"
+grep -q '^version=3$' "$catalog"
+grep -q '^path=sdmc:/switch/wine/drive_c/openttd/openttd.exe$' "$catalog"
+test "$(grep -c '^\[game ' "$catalog")" -eq 1
+echo "launcher host run: an empty library, a program added from the card and not started"
 
-# A library larger than one page: the grid has to page, and the buttons
-# have to be acted on while the icon worker posts an event per cover decoded.
-# tests/launcher_shot.py stages the games and reads back which cover each card
-# ended up showing, so a cover that went missing or came from another game
-# fails here rather than looking right in a screenshot nobody opens.
+# The host has no DXVK to download; Wine's own renderer needs nothing.
+printf 'd3d=wine\n' > "$card/switch/wine/drive_c/openttd/openttd.wine-nx.txt"
+
+# From the saved catalog: with nothing played yet the shell opens on the
+# library; A on the card opens the application's page, and Play there starts
+# it. The other programs on the card stay out of the library.
+cat > "$build/play.txt" <<SCRIPT
+wait 30
+shot $shots/library-one.png
+key a
+wait 16
+shot $shots/application-page.png
+key a
+wait 10
+SCRIPT
+shell play "$build/card"
+said play "[LAUNCHER] 1 catalog games (1 registered, 1 shown)"
+said play "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'"
+test "$(grep -c '^\[game ' "$catalog")" -eq 1
+
+# What was played is on Home, first.
+cat > "$build/home.txt" <<SCRIPT
+wait 30
+shot $shots/home-played.png
+key a
+wait 16
+key a
+wait 10
+SCRIPT
+shell home "$build/card"
+said home "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'"
+echo "launcher host run: the catalog is kept, the application's page starts it, Home has what was played"
+
+# Eight played programs and a walk through the screens around them: the main
+# menu (-), the quick panel (+), the library, an application's page, its
+# settings and its management list, and back out of each.
+cat > "$build/walk.txt" <<SCRIPT
+wait 35
+shot $shots/home.png
+key right
+key right
+wait 10
+key minus
+wait 12
+shot $shots/main-menu.png
+key b
+wait 8
+key plus
+wait 12
+shot $shots/quick-panel.png
+key b
+wait 8
+key r
+wait 14
+shot $shots/library.png
+key down
+key right
+wait 8
+key a
+wait 16
+shot $shots/page.png
+key right
+key right
+key a
+wait 12
+shot $shots/page-settings.png
+key down
+key down
+wait 6
+key b
+wait 8
+key x
+wait 12
+shot $shots/page-manage.png
+key b
+wait 8
+key b
+wait 8
+SCRIPT
+shell walk "$build/card" --carousel-fixture
+said walk "[LAUNCHER] 8 catalog games (8 registered, 8 shown)"
+said walk "launcher returned 0 target ''"
+echo "launcher host run: Home, main menu, quick panel, library, page, settings and management passed"
+
+# A library larger than a screen, with the buttons coming while the icon worker
+# is still decoding covers and posting an event for each one: every game is
+# loaded, the list scrolls to its end and back, and nothing is lost or leaked.
 big="$build/big/sdmc:"
 mkdir -p "$big/switch/wine"
 python3 "$horizon_wine/tests/launcher_shot.py" stage "$big" "$notepad" 120
-
-cat > "$build/scroll-script.txt" <<SCRIPT
-wait 60
-shot $shots/scroll-top.png
-key down
-wait 8
-key down
-wait 8
-key down
-wait 8
-key down
-wait 45
-shot $shots/scroll-down.png
-key up
-wait 8
-key up
-wait 8
-key up
-wait 8
-key up
-wait 45
-shot $shots/scroll-back.png
-key right
-key right
-key right
-key right
-key right
-wait 35
-shot $shots/page-upper.png
-key left
-wait 20
-shot $shots/page-upper-back.png
-key down
-key right
-wait 35
-shot $shots/page-lower.png
-key left
-wait 20
-shot $shots/page-lower-back.png
-trigger zr 32767
-trigger zr 25000
-wait 35
-shot $shots/page-trigger-held.png
-trigger zr 0
-trigger zr 32767
-trigger zr 0
-wait 35
-shot $shots/page-trigger-next.png
-key zl
-trigger zl 32767
-trigger zl 0
-wait 35
-shot $shots/page-trigger-back.png
-SCRIPT
-( cd "$build/big" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/scroll-script.txt" \
-    > "$build/scroll-out.txt" 2>&1 ) || { cat "$build/scroll-out.txt"; exit 1; }
-grep -q "120 catalog games (120 registered, 120 shown)" "$build/scroll-out.txt" || { cat "$build/scroll-out.txt"; exit 1; }
-# Four presses down select game 20, the first slot of the third page.
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/scroll-top.png" 0 0
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/scroll-down.png" 20 0
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/scroll-back.png" 0 0
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-upper.png" 10 0
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-upper-back.png" 0 4
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-lower.png" 10 5
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-lower-back.png" 0 9
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-trigger-held.png" 10 9
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-trigger-next.png" 20 9
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/page-trigger-back.png" 0 9
-echo "launcher host run: library row edges and triggers turn pages and keep every cover"
-
-# The same library from cold, with the presses coming while the worker is still
-# decoding covers and posting an event for each one. A frame that spent itself
-# on one of those events would leave the buttons queued behind them, and the
-# grid would still be on the first row long after the presses.
-cat > "$build/busy-script.txt" <<SCRIPT
-wait 18
-key down
-wait 2
-key down
-wait 2
-key down
-wait 2
-key down
-wait 25
-shot $shots/busy-scrolled.png
-SCRIPT
-( cd "$build/big" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/busy-script.txt" \
-    > "$build/busy-out.txt" 2>&1 ) || { cat "$build/busy-out.txt"; exit 1; }
-python3 "$horizon_wine/tests/launcher_shot.py" check "$shots/busy-scrolled.png" 20 0 3
-echo "launcher host run: buttons are read while the covers are still being decoded"
+{
+    echo "wait 18"
+    for step in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        echo "key down"; echo "wait 2"
+    done
+    echo "wait 30"
+    echo "shot $shots/library-scrolled.png"
+    for step in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        echo "key up"; echo "wait 2"
+    done
+    echo "wait 20"
+} > "$build/scroll.txt"
+shell scroll "$build/big"
+said scroll "[LAUNCHER] 120 catalog games (120 registered, 120 shown)"
+said scroll "launcher returned 0 target ''"
+echo "launcher host run: a library of 120 is loaded and scrolled while its covers are still being decoded"

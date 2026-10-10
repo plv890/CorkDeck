@@ -45,6 +45,11 @@ assert 'C_ASSERT(ARRAY_SIZE(wine_nx_audio_wow64_unix_funcs) == funcs_count);' in
     'the audio table must cover mmdevapi enum'
 assert 'const unsigned int wine_nx_audio_wow64_unix_count = ARRAY_SIZE(wine_nx_audio_wow64_unix_funcs);' in audio, \
     'the audio call count must be the size of its table'
+dnsapi = (root / 'horizon-wine/source/dnsapi_unix.c').read_text()
+assert 'const unsigned int wine_nx_dnsapi_wow64_unix_count = ARRAY_SIZE(wine_nx_dnsapi_wow64_unix_funcs);' in dnsapi,     'the dnsapi call count must be the size of its table'
+wma = (root / 'horizon-wine/source/wma_unix.c').read_text()
+assert 'C_ASSERT(ARRAY_SIZE(wine_nx_wma_unix_funcs) == wma_call_count);' in wma, 'the WMA table must cover its enum'
+assert 'const unsigned int wine_nx_wma_unix_count = ARRAY_SIZE(wine_nx_wma_unix_funcs);' in wma,     'the WMA call count must be the size of its table'
 xinput = (root / 'horizon-wine/source/xinput_unix.c').read_text()
 for table in ('wine_nx_xinput_unix_funcs', 'wine_nx_xinput_wow64_unix_funcs'):
     assert f'C_ASSERT( ARRAY_SIZE({table}) == nx_xinput_funcs_count );' in xinput, \
@@ -87,12 +92,18 @@ static NTSTATUS gl_call( void *args ) { last = 3; return 0; }
 static NTSTATUS audio_call( void *args ) { last = 4; return 0; }
 static NTSTATUS crypt_call( void *args ) { last = 5; return 0; }
 static NTSTATUS xinput_call( void *args ) { last = 6; return 0; }
+static NTSTATUS dns_call( void *args ) { last = 7; return 0; }
+static NTSTATUS wma_call( void *args ) { last = 8; return 0; }
 static const unixlib_entry_t unix_call_wow64_funcs[] = { ntdll_call, ntdll_call };
 const unixlib_entry_t wine_nx_ws2_32_wow64_unix_funcs[5] = { ws2_call, ws2_call, ws2_call, ws2_call, ws2_call };
 const unixlib_entry_t wine_nx_opengl32_wow64_unix_funcs[3] = { gl_call, gl_call, gl_call };
 const unixlib_entry_t wine_nx_audio_wow64_unix_funcs[2] = { audio_call, audio_call };
 const unixlib_entry_t wine_nx_crypt32_wow64_unix_funcs[2] = { crypt_call, crypt_call };
 const unixlib_entry_t wine_nx_xinput_wow64_unix_funcs[2] = { xinput_call, xinput_call };
+const unixlib_entry_t wine_nx_dnsapi_wow64_unix_funcs[4] = { dns_call, dns_call, dns_call, dns_call };
+const unixlib_entry_t wine_nx_wma_unix_funcs[3] = { wma_call, wma_call, wma_call };
+const unsigned int wine_nx_dnsapi_wow64_unix_count = 4;
+const unsigned int wine_nx_wma_unix_count = 3;
 const unsigned int wine_nx_ws2_32_wow64_unix_count = 5;
 const unsigned int wine_nx_opengl32_wow64_unix_count = 3;
 const unsigned int wine_nx_audio_wow64_unix_count = 2;
@@ -127,6 +138,10 @@ int main(void)
     CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_crypt32_wow64_unix_funcs), 2, 0 ) == STATUS_INVALID_PARAMETER );
     CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_xinput_wow64_unix_funcs), 1, 0 ) == 0 && last == 6 );
     CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_xinput_wow64_unix_funcs), 2, 0 ) == STATUS_INVALID_PARAMETER );
+    CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_dnsapi_wow64_unix_funcs), 3, 0 ) == 0 && last == 7 );
+    CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_dnsapi_wow64_unix_funcs), 4, 0 ) == STATUS_INVALID_PARAMETER );
+    CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_wma_unix_funcs), 2, 0 ) == 0 && last == 8 );
+    CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_wma_unix_funcs), 3, 0 ) == STATUS_INVALID_PARAMETER );
     last = 0;  /* the refused calls below must reach no table at all */
     CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_opengl32_wow64_unix_funcs), 3, 0 ) == STATUS_INVALID_PARAMETER );
     CHECK( wine_nx_call_ntdll_wow64( H(wine_nx_ws2_32_wow64_unix_funcs), 5, 0 ) == STATUS_INVALID_PARAMETER );

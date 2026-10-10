@@ -5,7 +5,11 @@
 #include <stdint.h>
 
 #define SETUP_BOOT_MAX_ENTRIES 64
-#define SETUP_BOOT_ENTRY_NAME "Autorun"
+#define SETUP_BOOT_ENTRY_NAME "CorkDeck"
+/* What the entry was called up to CorkDeck 0.2c. An entry of that name that
+ * setup made is taken for this one and is renamed where it stands when the
+ * boot entry is next written. */
+#define SETUP_BOOT_OLD_ENTRY_NAME "Autorun"
 #define SETUP_BOOT_INI "bootloader/hekate_ipl.ini"
 
 enum setup_boot_result
@@ -58,6 +62,8 @@ struct setup_boot_options
     char hoc_source[512];
 };
 
+/* Whether a boot entry's name is the one setup gives its own, now or before. */
+int setup_boot_entry_ours(const char *name);
 const struct setup_boot_manifest *setup_boot_bundled_manifest(void);
 void setup_boot_bundle_id(const struct setup_boot_manifest *manifest, char out[33]);
 int setup_boot_needs_update(const char *sd_root, const struct setup_boot_manifest *manifest,

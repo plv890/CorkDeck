@@ -56,11 +56,175 @@ static int yes(void *p) {
   (void)p;
   return 1;
 }
+
+/* A package as Microsoft's is laid out: a program, then a cabinet whose file is
+ * a cabinet whose files are libraries named with their architecture. */
+static size_t put_cab(unsigned char *out, const char *const names[], const unsigned char *const blobs[],
+                      const size_t sizes[], unsigned int count, int packed) {
+  unsigned char plain[4096], block[4096];
+  size_t total = 0, p, files_at, data_at, block_size;
+  unsigned int i;
+  for (i = 0; i < count; ++i) {
+    memcpy(plain + total, blobs[i], sizes[i]);
+    total += sizes[i];
+  }
+  if (packed) {
+    z_stream z = {0};
+    assert(deflateInit2(&z, 9, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) == Z_OK);
+    block[0] = 'C';
+    block[1] = 'K';
+    z.next_in = plain;
+    z.avail_in = (uInt)total;
+    z.next_out = block + 2;
+    z.avail_out = sizeof(block) - 2;
+    assert(deflate(&z, Z_FINISH) == Z_STREAM_END);
+    block_size = 2 + z.total_out;
+    deflateEnd(&z);
+  } else {
+    memcpy(block, plain, total);
+    block_size = total;
+  }
+  memset(out, 0, 36 + 8);
+  memcpy(out, "MSCF", 4);
+  out[24] = 3;
+  out[25] = 1;
+  out[26] = 1;
+  out[28] = (unsigned char)count;
+  files_at = 36 + 8;
+  for (p = files_at, i = 0, total = 0; i < count; ++i) {
+    put32(out + p, (unsigned int)sizes[i]);
+    put32(out + p + 4, (unsigned int)total);
+    memset(out + p + 8, 0, 8);
+    strcpy((char *)out + p + 16, names[i]);
+    p += 16 + strlen(names[i]) + 1;
+    total += sizes[i];
+  }
+  data_at = p;
+  put32(out + 16, (unsigned int)files_at);
+  put32(out + 36, (unsigned int)data_at);
+  out[40] = 1;
+  out[42] = (unsigned char)packed;
+  put32(out + p, 0);
+  out[p + 4] = (unsigned char)block_size;
+  out[p + 5] = (unsigned char)(block_size >> 8);
+  out[p + 6] = (unsigned char)total;
+  out[p + 7] = (unsigned char)(total >> 8);
+  memcpy(out + p + 8, block, block_size);
+  p += 8 + block_size;
+  put32(out + 8, (unsigned int)p);
+  return p;
+}
+static void test_unpack(const char *dir) {
+  static unsigned char inner[8192], outer[8192], package[16384];
+  unsigned char one[600], two[40], other[20], got[600];
+  const char *names[] = {"mfc140u.dll_x86", "vcruntime140.dll_x86", "mfc140u.dll_amd64", "notes.txt"};
+  const unsigned char *blobs[] = {one, two, other, other};
+  const size_t sizes[] = {sizeof(one), sizeof(two), sizeof(other), sizeof(other)};
+  const char *outer_names[] = {"a0"};
+  const unsigned char *outer_blobs[] = {inner};
+  size_t inner_size, outer_size, outer_sizes[1];
+  char file[512], system[512], path[640];
+  unsigned int added = 9, kept = 9, i;
+  FILE *f;
+  for (i = 0; i < sizeof(one); ++i)
+    one[i] = (unsigned char)(i * 7);
+  memset(two, 'B', sizeof(two));
+  memset(other, 'C', sizeof(other));
+  inner_size = put_cab(inner, names, blobs, sizes, 4, 1);
+  outer_sizes[0] = inner_size;
+  outer_size = put_cab(outer, outer_names, outer_blobs, outer_sizes, 1, 1);
+  memset(package, 'M', 1000); /* a program before it, full of the cabinet's first letter */
+  memcpy(package + 1000, outer, outer_size);
+  snprintf(file, sizeof(file), "%s/package.exe", dir);
+  write_file(file, package, 1000 + outer_size);
+  snprintf(system, sizeof(system), "%s/syswow64", dir);
+  assert(!mkdir(system, 0700));
+  /* What is there already stays as it is. */
+  snprintf(path, sizeof(path), "%s/vcruntime140.dll", system);
+  write_file(path, "wine's own", 10);
+  assert(!unpack_package(file, system, 0, &added, &kept));
+  assert(added == 1 && kept == 1);
+  assert((f = fopen(path, "rb")) && fread(got, 1, sizeof(got), f) == 10 && !memcmp(got, "wine's own", 10));
+  fclose(f);
+  snprintf(path, sizeof(path), "%s/mfc140u.dll", system);
+  assert((f = fopen(path, "rb")) && fread(got, 1, sizeof(got), f) == sizeof(one) && !memcmp(got, one, sizeof(one)));
+  fclose(f);
+  snprintf(path, sizeof(path), "%s/notes.txt", system);
+  assert(access(path, F_OK));
+  /* A second time adds nothing; the other architecture takes its own file. */
+  assert(!unpack_package(file, system, 0, &added, &kept) && added == 0 && kept == 2);
+  snprintf(system, sizeof(system), "%s/system32", dir);
+  assert(!mkdir(system, 0700));
+  assert(!unpack_package(file, system, 1, &added, &kept) && added == 1 && kept == 0);
+  snprintf(path, sizeof(path), "%s/mfc140u.dll", system);
+  assert((f = fopen(path, "rb")) && fread(got, 1, sizeof(got), f) == sizeof(other));
+  fclose(f);
+  /* A file with no cabinet of libraries in it is not a package. */
+  write_file(file, package, 1000);
+  assert(unpack_package(file, system, 0, &added, &kept) == STEAM_PREREQ_INTEGRITY);
+  /* Microsoft's own package, when the test is given one. */
+  if (getenv("CORKDECK_VC14_X86")) {
+    snprintf(system, sizeof(system), "%s/real", dir);
+    assert(!mkdir(system, 0700));
+    assert(!unpack_package(getenv("CORKDECK_VC14_X86"), system, 0, &added, &kept));
+    printf("Microsoft's package: %u libraries\n", added);
+    assert(added >= 20 && !kept);
+    snprintf(path, sizeof(path), "%s/mfc140u.dll", system);
+    assert(!access(path, F_OK));
+  }
+}
+static void test_missing(const char *dir) {
+  struct steam_prereq_missing m;
+  char root[512], p[640], exe[640];
+  snprintf(root, sizeof(root), "%s/card", dir);
+  assert(!mkdir(root, 0700));
+  snprintf(p, sizeof(p), "%s/drive_c", root);
+  assert(!mkdir(p, 0700));
+  snprintf(p, sizeof(p), "%s/drive_c/windows", root);
+  assert(!mkdir(p, 0700));
+  snprintf(p, sizeof(p), "%s/drive_c/windows/syswow64", root);
+  assert(!mkdir(p, 0700));
+  snprintf(p, sizeof(p), "%s/drive_c/windows/system32", root);
+  assert(!mkdir(p, 0700));
+  snprintf(p, sizeof(p), "%s/Any Game", dir);
+  assert(!mkdir(p, 0700));
+  snprintf(exe, sizeof(exe), "%s/Any Game/Any.exe", dir);
+  /* What a 32-bit program asks for is looked for beside it and in the 32-bit folder. */
+  pe_fixture(exe, 0, 0, "MFC140U.dll");
+  assert(steam_prereq_missing(root, exe, &m) && m.count == 1 && m.vc14 && m.architecture == 0);
+  assert(!strcmp(m.names[0], "MFC140U.dll"));
+  snprintf(p, sizeof(p), "%s/drive_c/windows/system32/MFC140U.dll", root);
+  write_file(p, "x", 1);
+  assert(steam_prereq_missing(root, exe, &m) && m.count == 1);
+  snprintf(p, sizeof(p), "%s/drive_c/windows/syswow64/MFC140U.dll", root);
+  write_file(p, "x", 1);
+  assert(steam_prereq_missing(root, exe, &m) && !m.count);
+  /* A 64-bit one in the 64-bit folder; a library of no package is named and not called Visual C++. */
+  pe_fixture(exe, 1, 0, "physx_loader.dll");
+  assert(steam_prereq_missing(root, exe, &m) && m.count == 1 && !m.vc14 && m.architecture == 1);
+  snprintf(p, sizeof(p), "%s/Any Game/physx_loader.dll", dir);
+  write_file(p, "x", 1);
+  assert(steam_prereq_missing(root, exe, &m) && !m.count);
+  /* The names Windows resolves by itself are not files to look for. */
+  pe_fixture(exe, 1, 0, "api-ms-win-crt-runtime-l1-1-0.dll");
+  assert(steam_prereq_missing(root, exe, &m) && !m.count);
+  /* One automatic attempt for each architecture is remembered. */
+  assert(!steam_prereq_tried(root, 0, 0) && steam_prereq_tried(root, 0, 1) && steam_prereq_tried(root, 0, 0));
+  assert(!steam_prereq_tried(root, 1, 0));
+}
 int main(void) {
   char root[] = "/tmp/autorun-prerequisites-XXXXXX", game[512], p[512],
        exe[512], request[64], result[256], out[512];
   struct steam_prereq_requirements v;
   assert(mkdtemp(root));
+  {
+    char extra[] = "/tmp/corkdeck-libraries-XXXXXX", command[128];
+    assert(mkdtemp(extra));
+    test_unpack(extra);
+    test_missing(extra);
+    snprintf(command, sizeof(command), "rm -rf %s", extra);
+    assert(!system(command));
+  }
   snprintf(p, sizeof(p), "%s/drive_c", root);
   assert(!mkdir(p, 0700));
   snprintf(p, sizeof(p), "%s/drive_c/windows", root);

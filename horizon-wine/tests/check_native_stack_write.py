@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+import arm64_host
 
 root = Path(__file__).resolve().parents[2]
 
@@ -174,8 +175,10 @@ with tempfile.TemporaryDirectory(prefix='native-stack-write-') as directory:
     build = Path(directory)
     path = build / 'stack.c'
     path.write_text(fixture + functions + dispatcher_fixture + dispatcher + tests)
-    subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-std=gnu11',
+    # The context the dispatcher is given is ARM64's.
+    subprocess.run(arm64_host.compiler(os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang')) + arm64_host.flags([
+                    '-std=gnu11',
                     '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', '-pthread',
                     '-D__SWITCH__', '-D__WINESRC__', '-D_WIN64', '-fms-extensions',
-                    '-I' + str(root / 'include'), str(path), '-o', str(build / 'stack')], check=True)
-    subprocess.run([str(build / 'stack')], check=True)
+                    '-I' + str(root / 'include'), str(path), '-o', str(build / 'stack')]), check=True)
+    subprocess.run(arm64_host.run(build / 'stack'), check=True)

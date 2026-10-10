@@ -5,11 +5,16 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import arm64_host
 
 root = Path(__file__).resolve().parents[2]
 horizon_wine = root / "horizon-wine"
 source = Path(os.environ.get("WINE_NX_FEX_DIR", horizon_wine / "toolchains/fex-2609"))
 build = Path(os.environ.get("WINE_NX_FEX_CORE_BUILD_DIR", horizon_wine / "toolchains/build-fex-2609-core-check"))
+# FEX's core is built for the machine it runs on (check-fex-core.sh configures
+# it), which here has to be the one it translates for.
+if not arm64_host.NATIVE or not (build / "build.ninja").is_file():
+    arm64_host.skip("needs an AArch64 Linux host with FEX's core configured by check-fex-core.sh")
 subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore", "JemallocDummy", "Common", "-j", "4"], check=True)
 definitions = re.findall(r"^#define (CPU_FEATURE_\w+) (0x[0-9a-fA-F]+)",
                          (source / "Source/Windows/include/winternl.h").read_text(), re.M)

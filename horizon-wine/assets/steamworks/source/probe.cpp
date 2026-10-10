@@ -15,6 +15,24 @@
 #include "steam/isteamfriends004.h"
 #include "steam/isteamclient007.h"
 
+/* Calls a function that returns a CSteamID as a game built with Visual C++ does:
+ * the address to write it to goes first, and comes back. The probe itself is
+ * built with the library's compiler, whose own way of returning one is another. */
+#if defined(__i386__)
+#define ABI_THISCALL __attribute__((thiscall))
+#else
+#define ABI_THISCALL
+#endif
+template<class C,class... P,class... A> static CSteamID msvc_call(C *object,CSteamID (C::*method)(P...),A... arguments){
+    union{CSteamID (C::*method)(P...);struct{intptr_t pointer,adjustment;}raw;}u;u.method=method;
+    size_t slot=(size_t)(u.raw.pointer-1)/sizeof(void*);
+    using Fn=CSteamID*(ABI_THISCALL *)(C*,CSteamID*,P...);
+    CSteamID result((uint64)0x1111111111111111ull);
+    volatile unsigned canary=0x5aa55aa5;
+    CSteamID *returned=((Fn)(*(void***)object)[slot])(object,&result,arguments...);
+    if(returned!=&result||canary!=0x5aa55aa5)return CSteamID((uint64)0xbadbadbadbadbadull);
+    return result;
+}
 #define CHECK(x) do{if(!(x)){printf("FAIL line %d: %s\n",__LINE__,#x);return 1;}}while(0)
 template<class T> T symbol(HMODULE h,const char*n){return (T)GetProcAddress(h,n);}
 struct Callback final:CCallbackBase{
@@ -67,7 +85,7 @@ int main(int argc,char**argv){
     auto *user8=(ISteamUser008*)lookup("SteamUser008");CHECK(user8);
     CHECK(client7->GetISteamUser(1,1,"SteamUser008")== (ISteamUser*)user8);
     CHECK(user8->GetHSteamUser()==1 && !user8->BLoggedOn());
-    CHECK(user8->GetSteamID().ConvertToUint64()==76561198000000000ull);
+    CHECK(msvc_call(user8,&ISteamUser008::GetSteamID).ConvertToUint64()==76561198000000000ull);
     char auth[32];memset(auth,0x5a,sizeof(auth));
     CHECK(!user8->InitiateGameConnection(auth,sizeof(auth),CSteamID((uint64)1),CGameID((uint64)480),0,0,false,nullptr,0));
     CHECK(auth[0]==0x5a && auth[sizeof(auth)-1]==0x5a);
@@ -99,9 +117,11 @@ int main(int argc,char**argv){
     auto*apps=(ISteamApps*)lookup(STEAMAPPS_INTERFACE_VERSION);CHECK(apps&&apps->BIsSubscribed());
     CHECK(apps->BIsSubscribedApp(480)&&!apps->BIsSubscribedApp(1));
     auto*user=(ISteamUser*)lookup(STEAMUSER_INTERFACE_VERSION);CHECK(user);
-    CHECK(user->UserHasLicenseForApp(user->GetSteamID(),480)==k_EUserHasLicenseResultHasLicense);
+    CHECK(msvc_call(user,&ISteamUser::GetSteamID).ConvertToUint64()==76561198000000000ull);
+    CHECK(user->UserHasLicenseForApp(msvc_call(user,&ISteamUser::GetSteamID),480)==k_EUserHasLicenseResultHasLicense);
     CHECK(user->UserHasLicenseForApp(CSteamID((uint64)1),480)==k_EUserHasLicenseResultDoesNotHaveLicense);
-    CHECK(user->UserHasLicenseForApp(user->GetSteamID(),1)==k_EUserHasLicenseResultDoesNotHaveLicense);
+    CHECK(user->UserHasLicenseForApp(msvc_call(user,&ISteamUser::GetSteamID),1)==k_EUserHasLicenseResultDoesNotHaveLicense);
+    {auto*owner_apps=(ISteamApps*)lookup(STEAMAPPS_INTERFACE_VERSION);CHECK(msvc_call(owner_apps,&ISteamApps::GetAppOwner).ConvertToUint64()==76561198000000000ull);}
     auto*oldapps=(ISteamApps005*)lookup("STEAMAPPS_INTERFACE_VERSION005");
     CHECK(oldapps&&oldapps->BIsSubscribedApp(480)&&!oldapps->BIsSubscribedApp(1));
     auto*old=(ISteamRemoteStorage006*)lookup("STEAMREMOTESTORAGE_INTERFACE_VERSION006");

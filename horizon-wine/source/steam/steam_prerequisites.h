@@ -16,6 +16,17 @@ struct steam_prereq_requirements { unsigned int needs,architecture,files,limited
  * A zero mask is Unknown, not proof that a game has no dependencies. */
 unsigned int steam_prereq_inspect(const char *game,const char *executable,const char *script,
                                  struct steam_prereq_requirements *);
+/* What a program's own file imports that is neither beside it nor in the
+ * Windows folder of its architecture: what the loader will not find. Returns 0
+ * when the file could not be read; a count of 0 is then no answer. */
+struct steam_prereq_missing { unsigned int count,vc14,architecture,limited; char names[6][64]; };
+int steam_prereq_missing(const char *root,const char *executable,struct steam_prereq_missing *);
+/* Whether the automatic installation was already tried for an architecture; mark records that it is. */
+int steam_prereq_tried(const char *root,unsigned int arch,int mark);
+/* Takes the libraries out of the verified package on the card into the Windows
+ * folder of that architecture, without running Microsoft's installer. Only
+ * libraries that are not there are written; none is replaced. */
+unsigned int steam_prereq_unpack(const char *root,unsigned int arch,unsigned int *added,unsigned int *kept);
 struct steam_prereq_progress { uint64_t downloaded,total; unsigned int error,http,transport; };
 struct steam_prereq_callbacks { void *context; int (*cancel)(void *);
     void (*progress)(void *,const struct steam_prereq_progress *); };

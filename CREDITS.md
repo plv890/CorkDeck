@@ -20,7 +20,7 @@ Wine, FEX, Box64, Mesa and mesa-switch, DXVK, VKD3D-Proton, libnx and devkitPro,
 
 The interface typeface is Manrope, under the SIL Open Font License.
 
-The local Steamworks compatibility library is a limited local implementation built against compatibility headers recorded at GBE revision `7103add7ca6ef3ef8353279219880068f2494fc8`. It is not Valve's library and not a full Steam implementation. Its sources are in [release-support/steamworks-local](release-support/steamworks-local).
+The local Steamworks compatibility library is a limited local implementation built against compatibility headers recorded at GBE revision `7103add7ca6ef3ef8353279219880068f2494fc8`. It is not Valve's library and not a full Steam implementation. Its sources are in [horizon-wine/assets/steamworks/source](horizon-wine/assets/steamworks/source).
 
 ## Licences and trademarks
 

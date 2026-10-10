@@ -262,8 +262,8 @@ static void test_clone(int hoc)
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &result) == 1);
     assert(result.size > strlen(original_ini));
     assert(!memcmp(result.data, original_ini, strlen(original_ini)));
-    clone = strstr((char *)result.data, "[Autorun]\r\n");
-    assert(clone && !strstr(clone + 1, "[Autorun]"));
+    clone = strstr((char *)result.data, "[CorkDeck]\r\n");
+    assert(clone && !strstr(clone + 1, "[CorkDeck]"));
     assert(strstr(clone, "emummcforce=1\r\nemupath=emuMMC/RAW1\r\n"));
     assert(strstr(clone, "icon=bootloader/res/My Icon.bmp\r\n# kept comment\r\n"));
     assert(strstr(clone, "kip1=atmosphere/kips/*\r\n"));
@@ -308,7 +308,7 @@ static void test_existing_secmon(void)
     assert(!setup_boot_needs_update(f.root, &f.manifest, NULL));
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &result) == 1);
     assert(!memcmp(result.data, ini, sizeof(ini) - 1));
-    assert((clone = strstr((char *)result.data, "[Autorun]\n")));
+    assert((clone = strstr((char *)result.data, "[CorkDeck]\n")));
     assert(strstr(clone, "kernel=" MESOSPHERE "\nsecmon=atmosphere/exosphere.bin\n"));
     check_file(f.root, "atmosphere/exosphere.bin", exosphere, sizeof(exosphere));
     free(result.data);
@@ -344,8 +344,8 @@ static void test_update(int hoc)
     check_absent(f.root, UPDATE_BACKUP);
     check_absent(f.root, COMMITTED);
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &after) == 1);
-    assert(strstr((char *)after.data, "[Autorun]") &&
-           !strstr(strstr((char *)after.data, "[Autorun]") + 1, "[Autorun]"));
+    assert(strstr((char *)after.data, "[CorkDeck]") &&
+           !strstr(strstr((char *)after.data, "[CorkDeck]") + 1, "[CorkDeck]"));
     assert(after.size == before.size && !memcmp(after.data, before.data, before.size));
     assert(strstr((char *)after.data, "kernel=" MESOSPHERE));
     check_file(f.root, MESOSPHERE, f.kernel, sizeof(f.kernel));
@@ -495,7 +495,7 @@ static void test_existing_kip(int hoc)
     refresh_entry(&f);
     assert(install(&f) == SETUP_BOOT_OK);
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &result) == 1);
-    assert(!strstr(strstr((char *)result.data, "[Autorun]"), "kip1=atmosphere/kips/loader.kip\r\n"));
+    assert(!strstr(strstr((char *)result.data, "[CorkDeck]"), "kip1=atmosphere/kips/loader.kip\r\n"));
     assert(strstr((char *)result.data, hoc ? "kip1=" HOC_KIP : "kip1=" STOCK_KIP));
     free(result.data);
     remove_fixture(f.root);
@@ -519,7 +519,7 @@ static void test_explicit_loader(void)
     refresh_entry(&f);
     assert(install(&f) == SETUP_BOOT_OK);
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &result) == 1);
-    assert((entry = strstr((char *)result.data, "[Autorun]\n")));
+    assert((entry = strstr((char *)result.data, "[CorkDeck]\n")));
     assert(strstr(entry, "pkg3=atmosphere/package3\nkip1=" STOCK_KIP "\n"
                          "kernel=" MESOSPHERE "\nemummc_force_disable=1\n"));
     assert(strstr(entry, "memmode=1\nicon=bootloader/res/emummc.bmp\n"));
@@ -551,7 +551,9 @@ static void test_legacy_entry(void)
     assert(install(&f) == SETUP_BOOT_OK);
     assert(!setup_boot_needs_update(f.root, &f.manifest, NULL));
     assert(read_file(f.root, SETUP_BOOT_INI, INI_LIMIT, &result) == 1);
-    assert((entry = strstr((char *)result.data, "[Autorun]\r\n")));
+    /* The entry of the old name is this one, renamed where it stood: there is no second. */
+    assert(!strstr((char *)result.data, "[Autorun]"));
+    assert((entry = strstr((char *)result.data, "[CorkDeck]\r\n")));
     assert(strstr(entry, "kernel=" MESOSPHERE "\r\n"));
     assert(strstr(entry, "kip1=" STOCK_KIP "\r\n"));
     assert(!strstr(entry, "bootloader/autorun/old/"));

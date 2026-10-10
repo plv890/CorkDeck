@@ -371,10 +371,9 @@ static int update( struct launcher_dlls *d )
     if (!d->have_remote || !d->planned || !d->plan.pending) return 1;
     snprintf( text, sizeof(text),
               "%u files: %s to download from the DLL repository on GitHub, %s on the SD card. What is "
-              "downloaded is kept if it stops part of the way, and the rest comes the next time.%s",
+              "downloaded is kept if it stops part of the way, and the rest comes the next time.",
               d->plan.pending, size_text( d->plan.download_bytes, amount, sizeof(amount) ),
-              size_text( d->plan.pending_bytes, unpacked, sizeof(unpacked) ),
-              d->plan.unsupported ? "\n\nSome files need a newer CorkDeck and are left as they are." : "" );
+              size_text( d->plan.pending_bytes, unpacked, sizeof(unpacked) ) );
     if (!ui_confirm( d->ui, ready( d, NULL, 0 ) ? "Update the Windows DLLs?" :
                      "Download the Windows DLLs?", text, "Download" ))
         return 0;
@@ -435,7 +434,7 @@ void launcher_dlls_open( struct launcher_dlls *d )
             if (c->pending)
                 snprintf( row->value, sizeof(row->value), "%u of %u to download", c->pending, c->files );
             else if (c->unsupported)
-                snprintf( row->value, sizeof(row->value), "%u need a newer CorkDeck", c->unsupported );
+                snprintf( row->value, sizeof(row->value), "%u files, %u not for this version", c->files, c->unsupported );
             else snprintf( row->value, sizeof(row->value), "%u files, %s", c->files,
                            size_text( c->bytes, amount, sizeof(amount) ) );
             row->value_tone = c->pending || c->unsupported ? UI_VALUE_NORMAL : UI_VALUE_SUCCESS;

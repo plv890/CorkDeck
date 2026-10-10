@@ -15,7 +15,7 @@
 /* The steps in the order they come. */
 enum setup_step
 {
-    STEP_FORWARDER, STEP_DLLS, STEP_LOADER, STEP_OVERCLOCK, STEP_MESOSPHERE, STEP_ENTRY, STEP_FINISH, STEP_COUNT
+    STEP_FORWARDER, STEP_DLLS, STEP_LOADER, STEP_MESOSPHERE, STEP_ENTRY, STEP_FINISH, STEP_COUNT
 };
 
 struct setup_job
@@ -106,7 +106,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
                        struct launcher_dlls *dlls)
 {
     static const char *const steps[STEP_COUNT] =
-        { "Forwarder", "Windows DLLs", "Loader", "Overclocking", "Mesosphere", "Boot entry", "Finish" };
+        { "Forwarder", "Windows DLLs", "Loader", "Mesosphere", "Boot entry", "Finish" };
     struct setup_boot_entry *entries = calloc(SETUP_BOOT_MAX_ENTRIES, sizeof(*entries));
     struct setup_job job = { .launcher = options };
     const struct setup_boot_manifest *manifest = setup_boot_bundled_manifest();
@@ -116,7 +116,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
     int step = 0, selected = 0, top = 0, installed = 0, updating = 0, result = 0;
     enum setup_boot_loader installed_loader = SETUP_BOOT_STOCK;
     int forwarder = options->own_forwarder && options->address_space_bits == 39 && options->four_cores_available;
-    char detail[512] = "", description[768], title[160], notice_text[256];
+    char detail[512] = "", description[768], title[160];
     enum setup_boot_result status;
     int romfs_mounted = 0;
 
@@ -144,7 +144,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
     status = setup_boot_list("sdmc:", entries, SETUP_BOOT_MAX_ENTRIES, &entry_count, detail, sizeof(detail));
     if (status == SETUP_BOOT_OK)
         for (size_t i = 0; i < entry_count; i++)
-            if (!strcasecmp(entries[i].name, SETUP_BOOT_ENTRY_NAME)) updating = 1;
+            if (setup_boot_entry_ours(entries[i].name)) updating = 1;
     if (manifest && updating) setup_boot_needs_update("sdmc:", manifest, &installed_loader);
     if (manifest) setup_boot_hoc_probe("sdmc:", manifest, &hoc);
     ui_start_screen(ui);
@@ -160,7 +160,6 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
         char dlls_text[160], dlls_status[64];
         int dlls_ready = launcher_dlls_is_ready(dlls), tone;
         description[0] = 0;
-        notice_text[0] = 0;
         snprintf(title, sizeof(title), "%s", steps[step]);
         switch (step)
         {
@@ -173,9 +172,9 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             disabled[0] = !forwarder && !options->install_forwarder;
             break;
         case STEP_DLLS:
-            snprintf(description, sizeof(description), "Games run on Windows DLLs that CorkDeck downloads from its DLL "
-                     "repository on GitHub, once, and keeps up to date from Settings > System > Windows DLLs. "
-                     "A game started without them sends you to that screen.");
+            snprintf(description, sizeof(description), "Games run on Windows DLLs that CorkDeck downloads "
+                     "once from its DLL repository on GitHub. They can be checked and downloaded again "
+                     "from Maintenance > Windows components.");
             snprintf(dlls_status, sizeof(dlls_status), "%s", launcher_dlls_status(dlls, dlls_text, sizeof(dlls_text), &tone));
             notice = launcher_dlls_describe(dlls, dlls_text, sizeof(dlls_text));
             items[0] = dlls_ready ? "Continue" : "Download Windows DLLs";
@@ -183,44 +182,29 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             if (!dlls_ready)
             {
                 items[1] = "Skip for now";
-                notes[1] = "Download them later from Settings > System";
+                notes[1] = "Download them later from Maintenance > Windows components";
                 count = 2;
             }
             break;
         case STEP_LOADER:
+            /* Overclocking is the owner's, set in Horizon OC: setup offers no settings of its
+             * own for it. The patched Horizon OC loader is installed only with the settings
+             * the owner's loader already has, carried over as they are. */
             snprintf(description, sizeof(description), "Choose the loader for the CorkDeck boot entry. "
-                     "Stock patches use separate files. The HOC option updates atmosphere/kips/hoc.kip and keeps its settings when selected.");
-            notice = manifest ? "Patches are bundled and verified against the selected Atmosphere package." :
-                                "Boot patches are not bundled in this build.";
+                     "The Horizon OC option replaces atmosphere/kips/hoc.kip and keeps your settings "
+                     "unchanged. CorkDeck sets no clocks.");
+            disabled[1] = !*hoc.path || !hoc.compatible || hoc_mismatch;
+            if (!manifest) notice = "Boot patches are not bundled in this build.";
+            else if (hoc_mismatch) notice = "Installed Horizon OC does not match the bundled version. Update it first, or choose the stock loader.";
+            else if (!*hoc.path) notice = "No Horizon OC loader was found on the card, so only the stock loader is offered.";
+            else if (!hoc.compatible) notice = "The settings of the installed Horizon OC cannot be carried over safely, so only the stock loader is offered.";
+            else notice = "Patches are bundled and verified against the selected Atmosphere package.";
             items[0] = "Stock Atmosphere loader";
-            items[1] = "HOC loader with overclocking";
+            items[1] = "Horizon OC loader";
             notes[0] = "For a standard Atmosphere setup";
-            notes[1] = "Keep HOC overclocking support";
+            notes[1] = "Your Horizon OC settings stay as they are";
             count = 2;
-            break;
-        case STEP_OVERCLOCK:
-            snprintf(description, sizeof(description), "Choose which overclock settings the patched HOC loader should use. "
-                     "It replaces atmosphere/kips/hoc.kip so the HOC overlay can keep editing the active loader.");
-            if (hoc_mismatch) notice = "Installed HOC does not match the bundled version. Update HOC first, or choose the stock loader.";
-            else if (!*hoc.path) notice = "No existing HOC loader found. Bundled defaults will be used.";
-            else if (!hoc.compatible) notice = "Existing HOC settings use a different CUST layout and cannot be copied safely.";
-            else if (hoc.kip_version != manifest->hoc_kip_version)
-            {
-                snprintf(notice_text, sizeof(notice_text),
-                         "Existing HOC %u.%u.%u differs from bundled %u.%u.%u. Compatible settings can still be copied.",
-                         hoc.kip_version / 100, hoc.kip_version / 10 % 10, hoc.kip_version % 10,
-                         manifest->hoc_kip_version / 100, manifest->hoc_kip_version / 10 % 10,
-                         manifest->hoc_kip_version % 10);
-                notice = notice_text;
-            }
-            else notice = "Your existing HOC configuration can be copied into the patched loader.";
-            items[0] = "Keep my overclock settings";
-            items[1] = "Use the bundled HOC defaults";
-            notes[0] = "Copy your compatible HOC configuration";
-            notes[1] = "Start with the supplied configuration";
-            disabled[0] = !hoc.compatible || hoc_mismatch;
-            disabled[1] = hoc_mismatch;
-            count = 2;
+            if (disabled[selected]) selected = 0;
             break;
         case STEP_MESOSPHERE:
             snprintf(description, sizeof(description), "The Mesosphere low-window patch lets a 39-bit CorkDeck process "
@@ -249,9 +233,9 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
             }
             else
             {
-                snprintf(description, sizeof(description), "Boot entry: %s\nLoader: %s\nOverclock settings: %s",
-                         job.boot.entry.name, job.boot.loader == SETUP_BOOT_HOC ? "HOC" : "Stock Atmosphere",
-                         job.boot.loader != SETUP_BOOT_HOC ? "Not changed" : job.boot.preserve_hoc ? "Preserve existing" : "Bundled defaults");
+                snprintf(description, sizeof(description), "Boot entry: %s\nLoader: %s\nHorizon OC settings: %s",
+                         job.boot.entry.name, job.boot.loader == SETUP_BOOT_HOC ? "Horizon OC" : "Stock Atmosphere",
+                         job.boot.loader != SETUP_BOOT_HOC ? "Not touched" : "Yours, carried over unchanged");
                 notice = manifest ? "Leave the SD card connected until installation finishes." :
                          "Patch files are not bundled yet. No boot files have been changed. Return to Quick setup when they are available.";
                 items[0] = updating ? "Update boot patches" : "Install boot patches";
@@ -268,7 +252,7 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
                 ui_sound(ui, LAUNCHER_SOUND_BACK);
                 if (installed) { result = 1; goto done; }
                 if (!step) goto done;
-                step -= step == STEP_MESOSPHERE && job.boot.loader == SETUP_BOOT_STOCK ? 2 : 1;
+                step--;
                 break;
             }
             if (input.button == UI_UP && selected) { selected--; ui_sound(ui, LAUNCHER_SOUND_MOVE); }
@@ -307,12 +291,8 @@ int launcher_setup_run(struct ui *ui, const struct wine_nx_launcher_options *opt
                 break;
             case STEP_LOADER:
                 job.boot.loader = selected ? SETUP_BOOT_HOC : SETUP_BOOT_STOCK;
-                if (!selected) job.boot.preserve_hoc = 0;
-                step = selected ? STEP_OVERCLOCK : STEP_MESOSPHERE;
-                break;
-            case STEP_OVERCLOCK:
-                job.boot.preserve_hoc = !selected;
-                if (job.boot.preserve_hoc) snprintf(job.boot.hoc_source, sizeof(job.boot.hoc_source), "%s", hoc.path);
+                job.boot.preserve_hoc = selected != 0;
+                if (selected) snprintf(job.boot.hoc_source, sizeof(job.boot.hoc_source), "%s", hoc.path);
                 else job.boot.hoc_source[0] = 0;
                 step = STEP_MESOSPHERE;
                 break;

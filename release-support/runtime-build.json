@@ -1,30 +1,28 @@
 {
-  "when": "2026-10-09T16:53:27+0400",
-  "commit": "b2ed5313eb6ef559d24775adf5ae9c5d5bf81a94",
-  "dirty": true,
-  "image": "autorun/switch-dev:cumulative-20261007",
-  "mirror": "/opt/fork-build",
-  "target": "wine-nx-runtime-nro",
-  "tracked_files_compared": 13125,
-  "differed_from_mirror": [
-    "horizon-wine/source/steam/steam_install.c"
-  ],
-  "absent_in_mirror": [],
-  "stale_in_mirror": [],
-  "synced": true,
-  "files": {
-    "nro": {
-      "size": 40807234,
-      "sha256": "b790c0197290d7b1074f4c8e6b9d36704741c9739d922a6e39fc38ccca136a25"
-    },
-    "elf": {
-      "size": 67267776,
-      "sha256": "4a8821e763678e8964cb618a51813ccff86b3820e21fa42c2f146256fca9f6b2"
-    }
+ "when": "2026-10-10T14:39:34+0400",
+ "commit": "bbd0fb8361e69daa6bba340a1d4294c5ccb57b7c",
+ "dirty": false,
+ "image": "autorun/switch-dev:cumulative-20261007",
+ "mirror": "/opt/fork-build",
+ "target": "wine-nx-runtime-nro",
+ "tracked_files_compared": 13135,
+ "differed_from_mirror": [],
+ "absent_in_mirror": [],
+ "stale_in_mirror": [],
+ "synced": false,
+ "files": {
+  "nro": {
+   "size": 42068802,
+   "sha256": "c4d64cdd112c520320345c3423526a63e73e6eba8857d755f6d64957dbe22055"
   },
-  "sources": {
-    "horizon-wine/source/steam/steam_install.c": "024a1710bcd9e9faaf3420cfda7c3a91f1e72a4843c988aef421d0d97a5be3b9"
-  },
-  "touched": [],
-  "exit": 0
+  "elf": {
+   "size": 68531792,
+   "sha256": "37e9eadc3707a1407e06e06b0c47a852c0684c6b3770cf1ba4ea6ac32dc29338"
+  }
+ },
+ "sources": {},
+ "touched": [
+  "horizon-wine/source/launcher.c"
+ ],
+ "exit": 0
 }

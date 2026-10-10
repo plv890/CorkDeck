@@ -180,15 +180,24 @@ static void layers( void )
     /* Nothing said anywhere: the defaults, each named as one. */
     app_settings_resolve( &s, NULL, NULL, NULL, NULL, NULL );
     assert( app_settings_get( &s, APP_SET_RENDERER ) == 1 && s.values[APP_SET_RENDERER].source == APP_LAYER_DEFAULT );
-    /* A development build has every diagnostic tool to hand; a release build is made without them. */
+    /* Diagnostics are a developer's: without the mode nothing of them runs, and each says why. */
+    assert( app_settings_get( &s, APP_SET_DEVELOPER ) == 0 && app_settings_get( &s, APP_SET_DIAGNOSTICS_MODE ) == 0 );
+    assert( s.values[APP_SET_DIAGNOSTICS_MODE].reason == APP_REASON_DEVELOPER_OFF );
+    assert( s.values[APP_SET_DIAGNOSTICS_MODE].layer[APP_LAYER_DEFAULT] == 2 );
+    assert( app_settings_get( &s, APP_SET_PERF_COUNTERS ) == 0 && s.values[APP_SET_PERF_COUNTERS].reason == APP_REASON_DEVELOPER_OFF );
+    assert( app_settings_get( &s, APP_SET_WAIT_DIAGNOSTICS ) == 0 && app_settings_get( &s, APP_SET_REMOTE_SNAPSHOT ) == 0 );
+    /* With it, a developer has every tool to hand, and the values tuned on the console before the fork. */
+    assert( wine_nx_config_parse( &global, "{ \"developer-mode\": true }" ) );
+    app_settings_resolve( &s, &global, NULL, NULL, NULL, NULL );
     assert( app_settings_get( &s, APP_SET_DIAGNOSTICS_MODE ) == 2 );
-    /* The values tuned on the console before the fork are what a new card starts with. */
     assert( app_settings_get( &s, APP_SET_STALL_SNAPSHOTS ) == 0 && app_settings_get( &s, APP_SET_PERF_COUNTERS ) == 1 );
+    /* What is not diagnostics does not depend on the mode. */
+    app_settings_resolve( &s, NULL, NULL, NULL, NULL, NULL );
     assert( app_settings_get( &s, APP_SET_WORKER_POLICY ) == 4 && app_settings_get( &s, APP_SET_SHADER_RAM_MB ) == 3 );
     assert( app_settings_get( &s, APP_SET_PAD_AS_KEYBOARD ) == 0 && app_settings_get( &s, APP_SET_WINDOWS ) == 0 );
 
     /* The general settings as the runtime writes them; the program's own word over them. */
-    assert( wine_nx_config_parse( &global, "{ \"verbose-log\": true, \"windows-through-opengl\": false,"
+    assert( wine_nx_config_parse( &global, "{ \"developer-mode\": true, \"verbose-log\": true, \"windows-through-opengl\": false,"
                                   " \"diagnostics\": \"extended\", \"cpu-worker-policy\": \"4\","
                                   " \"controller-as-keyboard-and-mouse\": true, \"language\": \"ru\" }" ) );
     app_settings_resolve( &s, &global, NULL, &limits, NULL, NULL );
@@ -204,7 +213,7 @@ static void layers( void )
     assert( app_settings_get( &s, APP_SET_PAD_AS_KEYBOARD ) == 0 );
 
     /* Observation: what changes how a program runs stays off, and says why. */
-    assert( wine_nx_config_parse( &global, "{ \"diagnostics\": \"observe\", \"verbose-log\": true, \"profiler\": true }" ) );
+    assert( wine_nx_config_parse( &global, "{ \"developer-mode\": true, \"diagnostics\": \"observe\", \"verbose-log\": true, \"profiler\": true }" ) );
     app_settings_resolve( &s, &global, NULL, &limits, NULL, NULL );
     assert( app_settings_get( &s, APP_SET_VERBOSE ) == 0 && s.values[APP_SET_VERBOSE].source == APP_LAYER_LIMIT );
     assert( s.values[APP_SET_VERBOSE].reason == APP_REASON_NEEDS_EXTENDED );
@@ -221,7 +230,7 @@ static void layers( void )
     assert( app_settings_get( &s, APP_SET_SHADER_RAM_MB ) == -1 && !strcmp( s.values[APP_SET_SHADER_RAM_MB].text, "24" ) );
     assert( !strcmp( app_setting_value_label( &s, APP_SET_SHADER_RAM_MB, APP_LANG_RU ), "24" ) );
     /* ...but not when diagnostics are switched off as a whole. */
-    assert( wine_nx_config_parse( &global, "{ \"diagnostics\": \"off\", \"verbose-log\": true, \"session-logs\": true }" ) );
+    assert( wine_nx_config_parse( &global, "{ \"developer-mode\": true, \"diagnostics\": \"off\", \"verbose-log\": true, \"session-logs\": true }" ) );
     app_settings_resolve( &s, &global, NULL, &limits, experiment, NULL );
     assert( !app_settings_get( &s, APP_SET_WAIT_DIAGNOSTICS ) && !app_settings_get( &s, APP_SET_PERF_COUNTERS ) );
     assert( !app_settings_get( &s, APP_SET_VERBOSE ) && !app_settings_get( &s, APP_SET_SESSION_LOGS ) );
@@ -254,6 +263,7 @@ static void layers( void )
     /* The general settings file takes what the model writes, and gives it back. */
     global.count = 0;
     assert( app_settings_set_global( &global, APP_SET_WINDOWS, 1 ) && !wine_nx_config_bool( &global, "windows-through-opengl", 1 ) );
+    assert( app_settings_set_global( &global, APP_SET_DEVELOPER, 1 ) );
     assert( app_settings_set_global( &global, APP_SET_DIAGNOSTICS_MODE, 2 ) && app_settings_set_global( &global, APP_SET_VERBOSE, 1 ) );
     assert( !app_settings_set_global( &global, APP_SET_RENDERER, 0 ) );
     app_settings_resolve( &s, &global, NULL, NULL, NULL, NULL );

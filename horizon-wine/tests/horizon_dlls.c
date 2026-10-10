@@ -32,12 +32,13 @@ static char dropped[8][256];
 
 #define CHECK( cond ) do { if (!(cond)) { fprintf( stderr, "%s:%d: %s\n", __FILE__, __LINE__, #cond ); exit( 1 ); } } while (0)
 
-/* A URL of the repository's main branch, from SERVED if it has the file and
- * from REPO otherwise. */
+/* A URL of the repository at the commit this build takes its set from, from
+ * SERVED if it has the file and from REPO otherwise. Nothing is asked of the
+ * main branch, which is somebody else's to move. */
 static enum horizon_dlls_result fetch( void *opaque, const char *url, horizon_dlls_sink sink, void *context,
                                        horizon_dlls_progress progress, void *progress_opaque )
 {
-    static const char prefix[] = HORIZON_DLLS_RAW "main/";
+    static const char prefix[] = HORIZON_DLLS_RAW HORIZON_DLLS_REVISION "/";
     static const char release[] = "https://github.com/autorunhq/autorun-horizon-dlls/";
     char path[1024], buffer[65536];
     unsigned long long done = 0;
@@ -297,6 +298,8 @@ static int phase_damaged( void )
     CHECK( update() == HORIZON_DLLS_HASH );
     after = read_all( path, &size_after );
     CHECK( before && after && size_before == size_after && !memcmp( before, after, size_before ) );
+    free( before );
+    free( after );
     strcat( path, ".part" );
     CHECK( access( path, F_OK ) );
     /* The download stopped at the first file that failed; the other, whose

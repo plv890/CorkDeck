@@ -53,6 +53,9 @@ for name in ['horizon_backing', 'horizon_mapping']:
     fixture += re.search(r'^struct ' + name + r'\n\{.*?^\};', s, re.M | re.S).group(0) + '\n'
 a = s.index('static struct horizon_backing backing_slots[')
 b = s.index('void horizon_memory_pool_stats(', a)
+# Defined elsewhere in horizon.c, used by the slice.
+fixture += 'static pthread_mutex_t mapping_mutex = PTHREAD_MUTEX_INITIALIZER;\n'
+fixture += 'static struct horizon_page_pool section_pages;\n'
 fixture += s[a:b]
 fixture += function('static int compare_mapping(')
 fixture += re.search(r'^static struct rb_tree mappings = .*?;', s, re.M).group(0) + '\n'

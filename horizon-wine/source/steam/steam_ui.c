@@ -14,6 +14,9 @@
 #endif
 static struct steam_provider *provider;
 static struct steam_launcher_adapter launcher;
+/* Developer mode: without it the export of diagnostics and the LAN view are not offered. */
+static int developer;
+void steam_ui_set_developer(int on){developer=on;}
 static uint32_t registered_app,removed_generation;
 static Uint32 diagnostic_tick;
 static uint32_t diagnostic_app;
@@ -325,13 +328,14 @@ void steam_ui_settings(struct ui *ui, const char *root) {
     snprintf(rows[7].value, sizeof(rows[7].value), "%s", lan_enabled ? "Enabled" : "Disabled");
     rows[7].help = "Read-only browser view of transfers and runtime/game logs. Trusted LAN only; plain HTTP. Stops when CorkDeck exits.";
     snprintf(rows[8].label, sizeof(rows[8].label), "About Steam integration");
+    if (!developer) rows[6] = rows[8];
     action = ui_list_run(ui, &list, "Steam settings",
-                         "Account and session / Downloads", rows, 9, 0);
+                         "Account and session / Downloads", rows, developer ? 9 : 7, 0);
     if (action == UI_ACTION_BACK || action == UI_ACTION_QUIT)
       break;
     if (action != UI_ACTION_CHOOSE)
       continue;
-    switch (list.selection) {
+    switch (!developer && list.selection == 6 ? 8 : list.selection) {
     case 0:
       steam_ui_open(ui, root);
       break;
@@ -587,6 +591,9 @@ void steam_ui_stop(void)
 }
 int steam_ui_restart(void){return provider&&steam_provider_restart_download(provider);}
 int steam_ui_resume(uint32_t app_id){return provider&&app_id&&steam_provider_install(provider,app_id);}
+int steam_ui_busy(uint32_t app_id){return provider&&steam_provider_busy(provider,app_id);}
+int steam_ui_forget_install(uint32_t app_id){return !provider||steam_provider_forget_install(provider,app_id);}
+void steam_ui_note_install(uint32_t app_id){if(provider)steam_provider_note_install(provider,app_id);}
 int steam_ui_online(void)
 {
     struct steam_status_view v;

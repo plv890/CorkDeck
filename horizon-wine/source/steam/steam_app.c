@@ -1,11 +1,18 @@
 #include "steam_app.h"
 #include "steam_settings.h"
 #include <limits.h>
+#include <stdlib.h>
+/* What a game lists is many times what is installed: every DLC and every
+ * system has depots of its own (Borderlands 2 lists more than a hundred). All
+ * are read; only those to install have to fit the application's own table. */
+#define STEAM_DEPOT_SEEN 1024
 #include <string.h>
 struct kv {
   const unsigned char *p, *end;
   char path[12][128];
   struct steam_app *app;
+  struct steam_depot *all;
+  size_t all_count;
   const char *language;
   struct {
     uint64_t id;
@@ -131,15 +138,15 @@ static int leaf(struct kv *k, unsigned int depth, const char *value) {
   if (depth < 3 || strcmp(k->path[1], "depots") || !number(k->path[2], &id) ||
       !id || id > UINT32_MAX)
     return 1;
-  for (i = 0; i < a->count && a->depots[i].id != (uint32_t)id; ++i) {
+  for (i = 0; i < k->all_count && k->all[i].id != (uint32_t)id; ++i) {
   }
-  if (i == a->count) {
-    if (a->count == STEAM_DEPOT_LIMIT)
+  if (i == k->all_count) {
+    if (k->all_count == STEAM_DEPOT_SEEN)
       return 0;
-    a->depots[a->count++] = (struct steam_depot){
+    k->all[k->all_count++] = (struct steam_depot){
         .id = (uint32_t)id, .source_app = a->id, .windows = 1, .language = 1};
   }
-  d = &a->depots[i];
+  d = &k->all[i];
   if (depth == 3) {
     if (!strcmp(key, "depotfromapp")) {
       if (!number(value, &v) || v > UINT32_MAX)
@@ -212,11 +219,11 @@ static int object(struct kv *k, unsigned int depth) {
       return 0;
   }
 }
-int steam_app_parse_language(const void *data, size_t size, uint32_t id,
-                    const char *language, struct steam_app *out) {
+static int parse(const void *data, size_t size, uint32_t id,
+                 const char *language, struct steam_app *out, struct steam_depot *all) {
   struct steam_app a = {.id = id, .windows = -1};
   struct kv k = {
-      .p = data, .end = (const unsigned char *)data + size, .app = &a, .language = language};
+      .p = data, .end = (const unsigned char *)data + size, .app = &a, .all = all, .language = language};
   size_t i, n = 0;
   int has64 = 0, language_depots = 0, selected_language = 0;
   memset(out, 0, sizeof(*out));
@@ -232,12 +239,12 @@ int steam_app_parse_language(const void *data, size_t size, uint32_t id,
   white(&k);
   if (k.p != k.end)
     return 0;
-  for (i = 0; i < a.count; ++i)
-    if (a.depots[i].windows && a.depots[i].language && !a.depots[i].dlc_app &&
-        !a.depots[i].optional && a.depots[i].arch64)
+  for (i = 0; i < k.all_count; ++i)
+    if (all[i].windows && all[i].language && !all[i].dlc_app &&
+        !all[i].optional && all[i].arch64)
       has64 = 1;
-  for (i = 0; i < a.count; ++i) {
-    struct steam_depot *d = &a.depots[i];
+  for (i = 0; i < k.all_count; ++i) {
+    struct steam_depot *d = &all[i];
     if(d->windows && !d->dlc_app && !d->optional && !(has64 && d->arch32) && (d->manifest || d->source_app != id)){
       if (d->language_specific) {
         ++language_depots;if(d->language)++selected_language;
@@ -253,6 +260,8 @@ int steam_app_parse_language(const void *data, size_t size, uint32_t id,
     if (a.total_size > UINT64_MAX - d->size)
       return 0;
     a.total_size += d->size;
+    if (n == STEAM_DEPOT_LIMIT)
+      return 0;
     a.depots[n++] = *d;
   }
   a.count = n;
@@ -269,6 +278,18 @@ int steam_app_parse_language(const void *data, size_t size, uint32_t id,
   }
   *out = a;
   return 1;
+}
+int steam_app_parse_language(const void *data, size_t size, uint32_t id,
+                    const char *language, struct steam_app *out) {
+  struct steam_depot *all = malloc(sizeof(*all) * STEAM_DEPOT_SEEN);
+  int ok;
+  if (!all) {
+    memset(out, 0, sizeof(*out));
+    return 0;
+  }
+  ok = parse(data, size, id, language, out, all);
+  free(all);
+  return ok;
 }
 int steam_app_parse(const void *data, size_t size, uint32_t id, struct steam_app *out) {
   return steam_app_parse_language(data, size, id, "english", out);

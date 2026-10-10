@@ -90,6 +90,9 @@ static unsigned int fetch(struct ui *ui, const char *root, unsigned int arch) {
   ui_start_screen(ui);
   return v.error;
 }
+unsigned int steam_prerequisites_fetch_ui(struct ui *ui, const char *root, unsigned int arch) {
+  return steam_prereq_cached(root, arch) ? 0 : fetch(ui, root, arch);
+}
 int steam_prerequisites_ui(struct ui *ui, const char *root, uint32_t app,
                            const char *script,
                            const struct steam_launcher_adapter *adapter) {

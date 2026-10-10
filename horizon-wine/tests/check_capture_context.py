@@ -10,7 +10,9 @@ and the capture leaves out -- the callee-saved q registers above all -- comes
 back as whatever was in the context's memory."""
 from pathlib import Path
 import subprocess
+import platform
 import tempfile
+import arm64_host
 
 root = Path(__file__).resolve().parents[2]
 horizon = (root / 'dlls/ntdll/unix/horizon.c').read_text()
@@ -55,7 +57,7 @@ fixture = r'''
 #define offsetof(t, f) __builtin_offsetof(t, f)
 #define CONTEXT_ARM64_FULL 0x400007
 #define __ASM_GLOBAL_FUNC(name, code) \
-    __asm__( ".text\n.globl _" #name "\n.p2align 2\n_" #name ":\n" code );
+    __asm__( ".text\n.globl @PREFIX@" #name "\n.p2align 2\n@PREFIX@" #name ":\n" code );
 
 typedef struct { uint64_t low, high; } NEON128;
 typedef struct
@@ -73,6 +75,8 @@ typedef struct
     unsigned char rest[0x100];
 } CONTEXT;
 #define X0 X[0]
+#define X18 X[18]
+typedef uintptr_t ULONG_PTR;
 #define ContextFlags_ ContextFlags
 
 /* libnx's, by the offsets horizon.c asserts. */
@@ -112,6 +116,9 @@ static void *current_teb( void )
 #define horizon_trace(...) ((void)0)
 
 extern int horizon_capture_context( CONTEXT *context );
+/* Natively the restore below does the work; FEX's own way is not this test's. */
+static int horizon_uses_fex( void ) { return 0; }
+static void wine_nx_fex_continue_context( const CONTEXT *context ) { (void)context; }
 
 @CAPTURE@
 
@@ -157,7 +164,8 @@ int main( void )
 }
 '''
 
-source = (fixture.replace('@CAPTURE@', capture)
+source = (fixture.replace('@PREFIX@', '_' if platform.system() == 'Darwin' else '')
+                 .replace('@CAPTURE@', capture)
                  .replace('@RESTORE@', restore)
                  .replace('@CONTINUE@', continue_.replace('context->Cpsr', 'context->Cpsr')))
 # horizon_continue_context writes dump.pstate; the test's struct puts it at 800.
@@ -167,5 +175,5 @@ with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'capture.c'
     path.write_text(source)
     binary = Path(tmp) / 'capture'
-    subprocess.run(['cc', '-O1', '-o', str(binary), str(path)], check=True)
-    print(subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.strip())
+    subprocess.run(arm64_host.compiler() + ['-O1', '-o', str(binary), str(path)], check=True)
+    print(subprocess.run(arm64_host.run(binary), check=True, capture_output=True, text=True).stdout.strip())

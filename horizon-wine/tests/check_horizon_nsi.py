@@ -10,6 +10,11 @@ root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument("--mingw-include", help="MinGW CRT headers for the Windows ABI checks")
 options = parser.parse_args()
+# Without the option, the headers of the toolchain the Windows side is built with.
+if not options.mingw_include:
+    bundled = sorted((root / 'horizon-wine/toolchains').glob('llvm-mingw-*/generic-w64-mingw32/include'))
+    if bundled:
+        options.mingw_include = str(bundled[-1])
 
 with tempfile.TemporaryDirectory(prefix="horizon-nsi-") as directory:
     directory = Path(directory)

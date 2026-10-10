@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Check both FEX CPU modules against the packaged Wine interfaces."""
+"""Check both FEX CPU modules against the packaged Wine interfaces.
+
+Without arguments, the modules and the Wine DLLs the DLL repository ships."""
 import argparse
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -12,15 +15,22 @@ sys.path.insert(0, str(horizon_wine.parent / 'horizon-dlls/tools'))
 from fex_payload import required_exports, validate_image
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('arm64ec', type=Path)
-parser.add_argument('wow64fex', type=Path)
-parser.add_argument('ntdll', type=Path)
-parser.add_argument('wow64', type=Path)
+shipped = horizon_wine.parent / 'horizon-dlls/switch/wine/drive_c/windows/system32'
+parser.add_argument('arm64ec', type=Path, nargs='?', default=shipped / 'libarm64ecfex.dll')
+parser.add_argument('wow64fex', type=Path, nargs='?', default=shipped / 'libwow64fex.dll')
+parser.add_argument('ntdll', type=Path, nargs='?', default=shipped / 'ntdll.dll')
+parser.add_argument('wow64', type=Path, nargs='?', default=shipped / 'wow64.dll')
 args = parser.parse_args()
+
+# The system's llvm-readobj, the one of the toolchain the DLLs are built with, or a versioned one.
+readobj = shutil.which('llvm-readobj') or next(
+    (str(p) for p in sorted((horizon_wine / 'toolchains').glob('llvm-mingw-*/bin/llvm-readobj'))), None) or next(
+    (shutil.which(f'llvm-readobj-{v}') for v in range(22, 12, -1) if shutil.which(f'llvm-readobj-{v}')), None)
+assert readobj, 'llvm-readobj is needed'
 
 
 def inspect(path, option):
-    return subprocess.check_output(['llvm-readobj', option, str(path)], text=True)
+    return subprocess.check_output([readobj, option, str(path)], text=True)
 
 
 def exports(path):

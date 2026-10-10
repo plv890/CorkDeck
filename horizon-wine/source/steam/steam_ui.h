@@ -24,6 +24,7 @@ void steam_ui_prepare(const char *runtime_dir);
 void steam_ui_tick(struct ui *,const char *runtime_dir);
 void steam_ui_set_launcher(const struct steam_launcher_adapter *);
 void steam_ui_shutdown(void);
+void steam_ui_set_developer(int on);
 /* For the shell's own screens. Each answers from the provider's state and
  * returns at once; none of them draws.
  * The transfer in hand: returns 0 when there is no provider. */
@@ -35,6 +36,13 @@ void steam_ui_stop(void);
 int steam_ui_restart(void);
 int steam_ui_resume(uint32_t app_id);
 int steam_ui_online(void);
+/* Whether Steam is downloading, installing or removing that game right now. */
+int steam_ui_busy(uint32_t app_id);
+/* After the shell removed a game's files: the account's list has it as not
+ * installed again. Returns 0 while Steam is itself working on that game. */
+int steam_ui_forget_install(uint32_t app_id);
+/* An installation found on the card that Steam's side had no record of. */
+void steam_ui_note_install(uint32_t app_id);
 /* The account's games as the library has them loaded; 0 when it is not loaded. */
 size_t steam_ui_owned(const char *runtime_dir,struct steam_game *,size_t capacity);
 /* The page of one game: install, verify, choose its program, remove. */

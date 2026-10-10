@@ -3,12 +3,6 @@
 # UBSan, no SDL and no libnx. Each service is linked only with what its header
 # says it needs, so a dependency that crept in fails here first.
 set -eu
-# Clock profiles: pure logic, one header.
-clock_build=$(mktemp -d)
-${CC:-cc} -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-pie -no-pie \
-    "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/clock_profile.c" -o "$clock_build/clock"
-"$clock_build/clock"
-rm -rf "$clock_build"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT HUP INT TERM

@@ -231,7 +231,9 @@ void steam_download_failure_log(const char *root,
   char folder[768], path[832], previous[864], when[32] = "";
   struct stat st = {0};
   time_t now = time(NULL);
-  struct tm *tm = localtime(&now);
+  /* Not localtime: its one buffer is every thread's, and lines written from
+   * the interface's thread came out as midnight. */
+  struct tm local, *tm = localtime_r(&now, &local);
   FILE *f;
   if (!v->app_id ||
       snprintf(folder, sizeof(folder), "%s/logs", root) >= (int)sizeof(folder))

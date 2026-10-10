@@ -74,6 +74,8 @@ static struct nx_prof_thread registry[NX_PROF_MAX_THREADS];
 static pthread_mutex_t registry_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int four_cores_enabled;
 static __thread int affinity_fixed;
+static int worker_policy;
+unsigned int wine_nx_application_core_mask = 7;
 '''
 test = r'''
 int main(void) {
@@ -138,11 +140,23 @@ int main(void) {
     wine_nx_thread_register('w', 5, (void *)123);
     assert(!registry[0].helper && !registry[0].name[0] && registry[0].tid == 5);
     assert(current_mask == 2 && current_priority == 59);
-    puts("Core affinity: permissions, opt-in, workers, native defaults, rollback, rename, explicit affinity and slot reuse passed");
+    /* A worker policy counts only with four cores; the kernel's own
+     * scheduling opens core 3 to every application thread. */
+    wine_nx_thread_configure_policy(4);
+    assert(wine_nx_thread_distributed_hints() && wine_nx_application_core_mask == 15);
+    assert(!svcSetThreadCoreMask(10, -1, 15) && current_mask == 15);
+    wine_nx_thread_configure_policy(2);
+    assert(!wine_nx_thread_distributed_hints() && wine_nx_application_core_mask == 7);
+    wine_nx_thread_configure_policy(7);
+    assert(strstr(log_line, "requested=7 effective=0"));
+    wine_nx_thread_configure_cores(0);
+    wine_nx_thread_configure_policy(4);
+    assert(!wine_nx_thread_distributed_hints() && wine_nx_application_core_mask == 7);
+    puts("Core affinity: permissions, opt-in, workers, native defaults, rollback, rename, explicit affinity, slot reuse and worker policy passed");
 }
 '''
 functions = "".join(definition(name) for name in (
-    "__wrap_svcSetThreadCoreMask",
+    "wine_nx_thread_distributed_hints", "__wrap_svcSetThreadCoreMask", "wine_nx_thread_configure_policy",
     "wine_nx_four_cores_available", "wine_nx_thread_configure_cores", "offload_thread_locked",
     "restore_thread_locked", "wine_nx_thread_set_name", "wine_nx_thread_set_affinity", "wine_nx_thread_register"))
 with tempfile.TemporaryDirectory(prefix="wine-nx-cores-") as tmp:

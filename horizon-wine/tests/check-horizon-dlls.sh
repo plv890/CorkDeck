@@ -12,9 +12,12 @@ build="$(mktemp -d "${TMPDIR:-/tmp}/horizon-dlls.XXXXXX")"
 trap 'rm -rf "$build"' EXIT HUP INT TERM
 
 python3 "$horizon_wine/tools/runtime_features.py" > "$build/features.txt"
+# SHA-256 is the system's on macOS and OpenSSL's elsewhere (horizon_dlls.c).
+crypto=-lcrypto
+[ "$(uname)" != Darwin ] || crypto=
 clang -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -O1 -g \
     -fsanitize=address,undefined -fno-omit-frame-pointer -I "$horizon_wine/source" \
-    -I/opt/homebrew/include "$horizon_wine/tests/horizon_dlls.c" "$horizon_wine/source/horizon_dlls.c" -L/opt/homebrew/lib -lzstd -lz \
+    -I/opt/homebrew/include "$horizon_wine/tests/horizon_dlls.c" "$horizon_wine/source/horizon_dlls.c" -L/opt/homebrew/lib -lzstd -lz $crypto \
     -o "$build/horizon_dlls"
 
 # Three states of the repository: a part of it (1), then with d3d9.dll changed
@@ -57,7 +60,7 @@ serve('served1', manifest)
 # tools/make-release.py writes it, but with quartz.dll as another version, as
 # when main has moved on since.
 import io, subprocess, tarfile
-release = build / 'served1/releases/latest/download'
+release = build / 'served1/releases/download/dlls'
 release.mkdir(parents=True)
 with tarfile.open(release / 'horizon-dlls.tar', 'w', format=tarfile.USTAR_FORMAT) as t:
     for f in manifest['files']:

@@ -23,8 +23,9 @@ wine = out / 'switch/wine'
 shutil.copytree(tree, wine)
 shutil.copyfile(build / 'runtime.nro', wine / 'wine-nx-runtime.nro')
 # Built by this project from open sources; their notices travel with them.
-for item in ('steam_api.dll', 'steam_api64.dll', 'build.json', 'COPYING.LESSER', 'SDK-NOTICE.txt',
-             'legacy-client/steamclient-local.dll'):
+# The Steam API libraries are inside the NRO since 0.2f and are written to the
+# card by the application; only the old client's stand-in still travels here.
+for item in ('COPYING.LESSER', 'SDK-NOTICE.txt', 'legacy-client/steamclient-local.dll'):
     target = wine / 'steamworks-local' / item
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(steam / item, target)

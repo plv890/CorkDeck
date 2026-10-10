@@ -10,10 +10,11 @@ import platform
 import re
 import subprocess
 import tempfile
+import arm64_host
 
 root = Path(__file__).resolve().parents[2]
 source = (root / 'dlls/ntdll/signal_arm64.c').read_text()
-assert platform.machine().lower() in ('arm64', 'aarch64'), 'Run on an ARM64 host'
+cc = arm64_host.compiler('clang')
 prefix = '_' if platform.system() == 'Darwin' else ''
 
 def assembly(name):
@@ -101,14 +102,14 @@ with tempfile.TemporaryDirectory(prefix='wine-nx-longjmp-') as tmp:
     (folder / 'test.c').write_text(fixture + body + tests)
     (folder / 'jumps.S').write_text('.text\n' + assembly('NTDLL__setjmpex') + assembly('longjmp_regs'))
     for optimization in ('-O0', '-O2'):
-        subprocess.run(['clang', optimization, '-Wall', '-Wextra', '-Werror', str(folder / 'test.c'),
+        subprocess.run(cc + [optimization, '-Wall', '-Wextra', '-Werror', str(folder / 'test.c'),
                         str(folder / 'jumps.S'), '-o', str(folder / 'test')], check=True)
-        subprocess.run([str(folder / 'test')], check=True)
+        subprocess.run(arm64_host.run(folder / 'test'), check=True)
     # Prove that the prior implementation fails this exact test.
     old_body = body.replace('    if (!buf->Frame) longjmp_regs( buf, retval );\n', '')
     assert old_body != body
     (folder / 'test.c').write_text(fixture + old_body + tests)
-    subprocess.run(['clang', '-O2', str(folder / 'test.c'), str(folder / 'jumps.S'),
+    subprocess.run(cc + ['-O2', str(folder / 'test.c'), str(folder / 'jumps.S'),
                     '-o', str(folder / 'baseline')], check=True)
-    assert subprocess.run([str(folder / 'baseline')]).returncode == 91
+    assert subprocess.run(arm64_host.run(folder / 'baseline')).returncode == 91
     print('Build-23 regression reproduced: NULL frame still entered RtlUnwind')

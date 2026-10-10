@@ -52,12 +52,12 @@ enum app_setting
     APP_SET_CORE_BALANCING,
     APP_SET_WORKER_POLICY,
     APP_SET_SHADER_RAM_MB,
-    APP_SET_CLOCK_PROFILE,
     /* Input */
     APP_SET_OWN_CONTROLS,
     APP_SET_PAD_AS_KEYBOARD,
     APP_SET_KEYBOARD_ON_FOCUS,
     /* Diagnostics */
+    APP_SET_DEVELOPER,
     APP_SET_DIAGNOSTICS_MODE,
     APP_SET_SESSION_LOGS,
     APP_SET_PERF_COUNTERS,
@@ -109,6 +109,7 @@ enum app_setting_reason
     APP_REASON_LSFG_MISSING,           /* Lossless.dll is not on the card */
     APP_REASON_FORWARDER_OLD,          /* the forwarder cannot give four cores */
     APP_REASON_FEX_MISSING,            /* the FEX module for this architecture is not installed */
+    APP_REASON_DEVELOPER_OFF,          /* developer mode is off: no diagnostics at all */
     APP_REASON_DIAGNOSTICS_OFF,        /* diagnostics are switched off as a whole */
     APP_REASON_NEEDS_EXTENDED,         /* affects the program: only in extended diagnostics */
     APP_REASON_EXPERIMENT_FILE,        /* a test file in the runtime folder says so */

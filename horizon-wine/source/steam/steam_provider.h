@@ -4,12 +4,15 @@
 #include "steam_library.h"
 #include "steam_install.h"
 struct steam_provider;
-struct steam_app_view {uint32_t app_id;int state,windows,language_missing,english_available;uint64_t size,available_languages;unsigned int error;char installscript[256];};
+struct steam_app_view {uint32_t app_id;int state,windows,language_missing,english_available,english_fallback;uint64_t size,available_languages;unsigned int error;char installscript[256];};
 struct steam_remove_view {uint32_t app_id;int busy;unsigned int error,generation;char directory[512];};
 int steam_provider_inspect(struct steam_provider *,uint32_t);
 void steam_provider_app_status(struct steam_provider *,struct steam_app_view *);
 int steam_provider_uninstall(struct steam_provider *,uint32_t);
 void steam_provider_remove_status(struct steam_provider *,struct steam_remove_view *);
+int steam_provider_forget_install(struct steam_provider *,uint32_t);
+int steam_provider_busy(struct steam_provider *,uint32_t);
+void steam_provider_note_install(struct steam_provider *,uint32_t);
 int steam_provider_set_root(struct steam_provider *,const char *);
 int steam_provider_install(struct steam_provider *,uint32_t);
 /* NULL uses the global setting; override applies only to this queued install. */

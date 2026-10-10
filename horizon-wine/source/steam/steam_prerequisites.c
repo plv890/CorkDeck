@@ -64,6 +64,14 @@ static int path(const char *root, const char *leaf, char out[512], int create) {
   n = snprintf(out, 512, "%s/%s", p, leaf);
   return n > 0 && n < 512;
 }
+/* The libraries of Microsoft's Visual C++ 2015-2022 package, MFC among them. */
+static int vc14_library(const char *name) {
+  return !strncasecmp(name, "vcruntime140", 12) ||
+         !strncasecmp(name, "msvcp140", 8) || !strncasecmp(name, "mfc140", 6) ||
+         !strncasecmp(name, "mfcm140", 7) || !strcasecmp(name, "concrt140.dll") ||
+         !strcasecmp(name, "vcomp140.dll") || !strcasecmp(name, "vccorlib140.dll") ||
+         !strcasecmp(name, "vcamp140.dll");
+}
 static unsigned int need(const char *name) {
   /* An adjacent API DLL alone does not provide the Steam client interfaces.
    * This is an advisory dependency, not an ownership or readiness verdict. */
@@ -73,7 +81,7 @@ static unsigned int need(const char *name) {
   if (!strcasecmp(name, "vcruntime140.dll") ||
       !strncasecmp(name, "vcruntime140_", 13) ||
       !strcasecmp(name, "msvcp140.dll") || !strncasecmp(name, "msvcp140_", 9) ||
-      !strcasecmp(name, "concrt140.dll"))
+      !strcasecmp(name, "concrt140.dll") || vc14_library(name))
     return STEAM_PREREQ_VC14;
   if (!strncasecmp(name, "msvcr", 5) || !strncasecmp(name, "msvcp", 5))
     return STEAM_PREREQ_LEGACY_VC;
@@ -84,6 +92,10 @@ static unsigned int need(const char *name) {
     return STEAM_PREREQ_DOTNET;
   return 0;
 }
+/* steam_prereq_missing listens to the names pe_imports reads. Called from the
+ * interface's thread only. */
+static void (*import_seen)(void *, const char *);
+static void *import_context;
 static int pe_imports(const char *file, struct steam_prereq_requirements *v,
                       int main) {
   struct launcher_pe pe;
@@ -148,6 +160,8 @@ static int pe_imports(const char *file, struct steam_prereq_requirements *v,
       if (j == sizeof(name))
         goto fail;
       v->needs |= need(name);
+      if (import_seen)
+        import_seen(import_context, name);
     }
   }
   launcher_pe_close(&pe);
@@ -194,6 +208,79 @@ static void script_hints(const char *file,
   if (strstr(text, "physx") || strstr(text, "openal") ||
       strstr(text, "ue4prereq") || strstr(text, "ueprereq"))
     v->needs |= STEAM_PREREQ_CUSTOM;
+}
+struct missing_scan {
+  struct steam_prereq_missing *out;
+  char folder[512], system[512];
+};
+static void missing_seen(void *opaque, const char *name) {
+  struct missing_scan *m = opaque;
+  char p[768];
+  unsigned int i;
+  /* API sets are names the loader resolves itself, not files. */
+  if (!strncasecmp(name, "api-ms-", 7) || !strncasecmp(name, "ext-ms-", 7) ||
+      strchr(name, '/') || strchr(name, '\\'))
+    return;
+  if (snprintf(p, sizeof(p), "%s/%s", m->folder, name) < (int)sizeof(p) && regular(p))
+    return;
+  if (snprintf(p, sizeof(p), "%s/%s", m->system, name) < (int)sizeof(p) && regular(p))
+    return;
+  for (i = 0; i < m->out->count; ++i)
+    if (!strcasecmp(m->out->names[i], name))
+      return;
+  if (vc14_library(name))
+    m->out->vc14 = 1;
+  if (m->out->count == sizeof(m->out->names) / sizeof(m->out->names[0]) ||
+      strlen(name) >= sizeof(m->out->names[0])) {
+    m->out->limited = 1;
+    return;
+  }
+  strcpy(m->out->names[m->out->count++], name);
+}
+int steam_prereq_missing(const char *root, const char *exe,
+                         struct steam_prereq_missing *out) {
+  struct steam_prereq_requirements v = {0};
+  struct missing_scan m = {.out = out};
+  char *slash;
+  int read;
+  memset(out, 0, sizeof(*out));
+  if (strlen(exe) >= sizeof(m.folder))
+    return 0;
+  strcpy(m.folder, exe);
+  if (!(slash = strrchr(m.folder, '/')))
+    return 0;
+  *slash = 0;
+  /* The file says which of the two it is; the folder follows from that. */
+  v.architecture = 2;
+  read = pe_imports(exe, &v, 1);
+  if (!read || v.architecture > 1)
+    return 0;
+  out->architecture = v.architecture;
+  if (snprintf(m.system, sizeof(m.system), "%s/drive_c/windows/%s", root,
+               v.architecture ? "system32" : "syswow64") >= (int)sizeof(m.system) ||
+      !directory(m.system, 0))
+    return 0;
+  memset(&v, 0, sizeof(v));
+  import_seen = missing_seen;
+  import_context = &m;
+  read = pe_imports(exe, &v, 1);
+  import_seen = NULL;
+  out->limited |= v.limited;
+  return read;
+}
+/* One automatic attempt for an architecture: a second would end as the first. */
+int steam_prereq_tried(const char *root, unsigned int arch, int mark) {
+  char leaf[64], p[512];
+  snprintf(leaf, sizeof(leaf), "VC14-%s.added", arch ? "x64" : "x86");
+  if (!path(root, leaf, p, mark))
+    return 0;
+  if (mark) {
+    FILE *f = fopen(p, "wb");
+    if (f)
+      fclose(f);
+    return f != NULL;
+  }
+  return regular(p);
 }
 #include <dirent.h>
 unsigned int steam_prereq_inspect(const char *game, const char *exe,
@@ -308,6 +395,265 @@ int steam_prereq_cached(const char *root, unsigned int arch) {
   char p[512];
   const struct steam_prereq_catalog *c = steam_prereq_catalog(arch);
   return c && path(root, c->file, p, 0) && hash(p, c);
+}
+/* --- Taking the libraries out of Microsoft's package ---
+ *
+ * The package is an installer that needs Windows' own installer service, which
+ * is not there to run it. What it would put in the Windows folder is inside it
+ * as plain cabinets: the program with a cabinet attached, whose files are more
+ * cabinets, whose files are the libraries under their own names with the
+ * architecture after an underscore (mfc140u.dll_x86). Every cabinet found is
+ * opened, to three deep, and each library of the package's family that the
+ * Windows folder does not have is written there. Nothing that is there is
+ * replaced: Wine's own builds of the common ones stay as they are.
+ *
+ * Stored and MSZIP folders are read; a cabinet in parts or in another
+ * compression is passed over. The package was checked against its pinned
+ * SHA-256 before this, so the cabinets' own checksums are not looked at. */
+#include <zlib.h>
+#define CAB_LIMIT (96u * 1024u * 1024u)
+struct cab {
+  const unsigned char *data;
+  size_t size;
+  unsigned int folders, files, reserve_folder, reserve_data;
+  size_t folder_at, file_at;
+};
+struct cab_file {
+  char name[128];
+  size_t size, offset;
+  unsigned int folder;
+};
+struct unpacking {
+  const char *system;
+  unsigned int arch, added, kept, error;
+};
+static unsigned int cab16(const unsigned char *p) { return p[0] | p[1] << 8; }
+static size_t cab32(const unsigned char *p) {
+  return (size_t)p[0] | (size_t)p[1] << 8 | (size_t)p[2] << 16 | (size_t)p[3] << 24;
+}
+static int cab_open(const unsigned char *data, size_t size, struct cab *c) {
+  size_t p = 36, whole;
+  unsigned int flags;
+  memset(c, 0, sizeof(*c));
+  if (size < 40 || memcmp(data, "MSCF", 4) || cab32(data + 4) || cab32(data + 12) ||
+      cab32(data + 20) || data[25] != 1)
+    return 0;
+  whole = cab32(data + 8);
+  flags = cab16(data + 30);
+  /* A cabinet that goes on in another file is not one this reads. */
+  if (whole < 40 || whole > size || (flags & 3))
+    return 0;
+  c->data = data;
+  c->size = whole;
+  c->file_at = cab32(data + 16);
+  c->folders = cab16(data + 26);
+  c->files = cab16(data + 28);
+  if (flags & 4) {
+    if (p + 4 > whole)
+      return 0;
+    c->reserve_folder = data[p + 2];
+    c->reserve_data = data[p + 3];
+    p += 4 + cab16(data + p);
+  }
+  c->folder_at = p;
+  if (!c->folders || !c->files || c->folders > 256 ||
+      p > whole || (size_t)c->folders * (8 + c->reserve_folder) > whole - p ||
+      c->file_at < p || c->file_at >= whole)
+    return 0;
+  return 1;
+}
+/* The files in order; *at starts as 0. Returns 0 at the end or at a file that cannot be read. */
+static int cab_next(const struct cab *c, size_t *at, unsigned int *index, struct cab_file *f) {
+  size_t p = *at ? *at : c->file_at, n;
+  if (*index >= c->files || p + 17 > c->size)
+    return 0;
+  f->size = cab32(c->data + p);
+  f->offset = cab32(c->data + p + 4);
+  f->folder = cab16(c->data + p + 8);
+  p += 16;
+  for (n = 0; p + n < c->size && c->data[p + n]; ++n) {
+  }
+  if (p + n >= c->size || n >= sizeof(f->name))
+    return 0;
+  memcpy(f->name, c->data + p, n + 1);
+  *at = p + n + 1;
+  ++*index;
+  return 1;
+}
+/* A folder's data whole, as far as its files reach. NULL when it cannot be read. */
+static unsigned char *cab_folder(const struct cab *c, unsigned int folder, size_t *size) {
+  const unsigned char *entry = c->data + c->folder_at + (size_t)folder * (8 + c->reserve_folder);
+  size_t p = cab32(entry), need = 0, used = 0, at = 0;
+  unsigned int blocks = cab16(entry + 4), type = cab16(entry + 6) & 15, i, index = 0;
+  struct cab_file f;
+  unsigned char *out;
+  z_stream z;
+  if (type > 1)
+    return NULL;
+  while (cab_next(c, &at, &index, &f))
+    if (f.folder == folder && f.offset + f.size > need)
+      need = f.offset + f.size;
+  if (index != c->files || !need || need > CAB_LIMIT || !(out = malloc(need)))
+    return NULL;
+  memset(&z, 0, sizeof(z));
+  if (type && inflateInit2(&z, -15) != Z_OK) {
+    free(out);
+    return NULL;
+  }
+  for (i = 0; i < blocks && used < need; ++i) {
+    size_t packed, plain;
+    if (p + 8 + c->reserve_data > c->size)
+      goto fail;
+    packed = cab16(c->data + p + 4);
+    plain = cab16(c->data + p + 6);
+    p += 8 + c->reserve_data;
+    if (packed > c->size - p || plain > need - used)
+      goto fail;
+    if (!type) {
+      if (packed != plain)
+        goto fail;
+      memcpy(out + used, c->data + p, plain);
+    } else {
+      /* Each block is a stream of its own that may look back into the 32 KB before it. */
+      size_t back = used < 32768 ? used : 32768;
+      if (packed < 2 || c->data[p] != 'C' || c->data[p + 1] != 'K' || inflateReset(&z) != Z_OK ||
+          (back && inflateSetDictionary(&z, out + used - back, (uInt)back) != Z_OK))
+        goto fail;
+      z.next_in = (Bytef *)(c->data + p + 2);
+      z.avail_in = (uInt)(packed - 2);
+      z.next_out = out + used;
+      z.avail_out = (uInt)plain;
+      if (inflate(&z, Z_FINISH) != Z_STREAM_END || z.avail_out)
+        goto fail;
+    }
+    used += plain;
+    p += packed;
+  }
+  if (used < need)
+    goto fail;
+  if (type)
+    inflateEnd(&z);
+  *size = used;
+  return out;
+fail:
+  if (type)
+    inflateEnd(&z);
+  free(out);
+  return NULL;
+}
+/* "mfc140u.dll_x86" for the 32-bit Windows folder is mfc140u.dll. */
+static int unpack_name(const char *name, unsigned int arch, char out[64]) {
+  const char *mark = strrchr(name, '_');
+  size_t n;
+  if (!mark || strchr(name, '/') || strchr(name, '\\'))
+    return 0;
+  if (arch ? strcasecmp(mark + 1, "amd64") && strcasecmp(mark + 1, "x64") : strcasecmp(mark + 1, "x86"))
+    return 0;
+  n = (size_t)(mark - name);
+  if (n < 5 || n >= 64 || strncasecmp(mark - 4, ".dll", 4))
+    return 0;
+  memcpy(out, name, n);
+  out[n] = 0;
+  return vc14_library(out);
+}
+static void unpack_file(struct unpacking *u, const char *name, const unsigned char *data, size_t size) {
+  char p[768], tmp[784];
+  FILE *f;
+  int ok;
+  if (snprintf(p, sizeof(p), "%s/%s", u->system, name) >= (int)sizeof(p))
+    return;
+  if (regular(p)) {
+    ++u->kept;
+    return;
+  }
+  snprintf(tmp, sizeof(tmp), "%s.corkdeck-new", p);
+  if (!(f = fopen(tmp, "wb"))) {
+    u->error = STEAM_PREREQ_FILESYSTEM;
+    return;
+  }
+  ok = fwrite(data, 1, size, f) == size && !fflush(f) && !fsync(fileno(f));
+  if (fclose(f))
+    ok = 0;
+  if (ok && !rename(tmp, p))
+    ++u->added;
+  else {
+    unlink(tmp);
+    u->error = STEAM_PREREQ_FILESYSTEM;
+  }
+}
+static void unpack_cab(struct unpacking *u, const struct cab *c, int depth) {
+  unsigned int folder;
+  for (folder = 0; folder < c->folders && !u->error; ++folder) {
+    size_t size = 0, at = 0;
+    unsigned int index = 0;
+    struct cab_file f;
+    unsigned char *data = cab_folder(c, folder, &size);
+    if (!data)
+      continue;
+    while (!u->error && cab_next(c, &at, &index, &f)) {
+      struct cab inner;
+      char name[64];
+      if (f.folder != folder || f.offset > size || f.size > size - f.offset)
+        continue;
+      if (unpack_name(f.name, u->arch, name))
+        unpack_file(u, name, data + f.offset, f.size);
+      else if (depth < 3 && cab_open(data + f.offset, f.size, &inner))
+        unpack_cab(u, &inner, depth + 1);
+    }
+    free(data);
+  }
+}
+static unsigned int unpack_package(const char *package, const char *system, unsigned int arch,
+                                   unsigned int *added, unsigned int *kept) {
+  struct unpacking u = {.system = system, .arch = arch};
+  struct stat s;
+  unsigned char *data;
+  size_t size, at;
+  FILE *f;
+  *added = *kept = 0;
+  if (lstat(package, &s) || !S_ISREG(s.st_mode) || s.st_size < 64 || (uint64_t)s.st_size > CAB_LIMIT)
+    return STEAM_PREREQ_INTEGRITY;
+  size = (size_t)s.st_size;
+  if (!(data = malloc(size)))
+    return STEAM_PREREQ_SPACE;
+  if (!(f = fopen(package, "rb")) || fread(data, 1, size, f) != size) {
+    if (f)
+      fclose(f);
+    free(data);
+    return STEAM_PREREQ_FILESYSTEM;
+  }
+  fclose(f);
+  for (at = 0; at + 40 <= size && !u.error;) {
+    struct cab c;
+    const unsigned char *found = memchr(data + at, 'M', size - at - 39);
+    if (!found)
+      break;
+    at = (size_t)(found - data);
+    if (cab_open(data + at, size - at, &c)) {
+      unpack_cab(&u, &c, 1);
+      at += c.size;
+    } else
+      ++at;
+  }
+  free(data);
+  *added = u.added;
+  *kept = u.kept;
+  /* A package none of whose libraries could be found was not read at all. */
+  return u.error ? u.error : u.added + u.kept ? 0 : STEAM_PREREQ_INTEGRITY;
+}
+unsigned int steam_prereq_unpack(const char *root, unsigned int arch, unsigned int *added, unsigned int *kept) {
+  const struct steam_prereq_catalog *c = steam_prereq_catalog(arch);
+  char package[512], system[512];
+  struct statvfs v;
+  *added = *kept = 0;
+  if (!c || !path(root, c->file, package, 0) || !steam_prereq_cached(root, arch))
+    return STEAM_PREREQ_INTEGRITY;
+  if (snprintf(system, sizeof(system), "%s/drive_c/windows/%s", root, arch ? "system32" : "syswow64") >=
+          (int)sizeof(system) || !directory(system, 0))
+    return STEAM_PREREQ_PATH;
+  if (!statvfs(system, &v) && (uint64_t)v.f_bavail * v.f_frsize < 64u * 1024u * 1024u)
+    return STEAM_PREREQ_SPACE;
+  return unpack_package(package, system, arch, added, kept);
 }
 struct transfer {
   FILE *file;

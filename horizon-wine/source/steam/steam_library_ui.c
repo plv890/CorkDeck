@@ -208,7 +208,9 @@ static int game_details(struct ui *ui, struct steam_provider *p,
           override=language;
         }
         if (steam_provider_install_language(p, g->app_id, override)) {
-          ui_toast(ui, "Installation started. Open Downloads to view progress.",
+          ui_toast(ui, app.english_fallback && !override
+                           ? "This game has no files in the chosen language. Installing it in English."
+                           : "Installation started. Open Downloads to view progress.",
                    4000);
           goto done;
         }
@@ -245,6 +247,10 @@ static int game_details(struct ui *ui, struct steam_provider *p,
     snprintf(text,sizeof(text),"Installation  %s%s",app.app_id==g->app_id&&app.state==2?(app.language_missing?size:app.size?size:"Size unavailable"):app.app_id==g->app_id&&app.state==3?"Unavailable":"Reading Steam metadata...",app.app_id==g->app_id&&app.state==2&&app.size&&!app.language_missing?" (estimate)":"");
     ui_text(ui,ui->normal,438,274,text,ui->value);
     steam_provider_language(p,language);
+    /* English stands in by itself for a language the game has no files in. */
+    if(app.app_id==g->app_id&&app.state==2&&app.english_fallback)
+      snprintf(text,sizeof(text),"Language  English (no files in %s)   /   %s",language,g->shared?"Steam Families":"Owned library");
+    else
     snprintf(text,sizeof(text),"Language  %s%s   /   %s",language,app.app_id==g->app_id&&app.state==2&&app.language_missing?" (choose alternative)":"",g->shared?"Steam Families":"Owned library");
     ui_text(ui,ui->small,438,328,text,ui->dim);
     ui_text(ui,ui->small,438,366,"Compatibility  Unknown",ui->dim);

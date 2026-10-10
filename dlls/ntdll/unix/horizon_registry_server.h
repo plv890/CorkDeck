@@ -6,6 +6,7 @@
 
 /* The runtime's folder: system.reg and user.reg are in its registry/, the
  * classes the payload ships in config/. The host test uses a scratch folder. */
+#include "horizon_wic_registry.h"
 #ifndef HORIZON_REGISTRY_DIR
 #include "horizon_runtime_paths.h"
 #define HORIZON_REGISTRY_DIR WINE_NX_RUNTIME_ROOT "/"
@@ -334,6 +335,16 @@ static unsigned int horizon_registry_init(void)
      * Loaded before system.reg, so anything a program has written for itself
      * since still wins. */
     horizon_registry_load_hive( machine, "horizon-dlls/classes.reg" );
+    /* What a DLL writes for itself in code when it is registered is in no
+     * registration script, so classes.reg does not have it. windowscodecs.dll
+     * writes the lists its decoders, encoders, converters and pixel formats are
+     * found by: without them no picture format is recognized, and D3DX loads no
+     * PNG or JPEG texture (horizon-wine/tools/make-wic-registry.py). */
+    {
+        unsigned int wic_errors = 0;
+
+        horizon_reg_load( &horizon_registry, machine, wic_registry_hive, sizeof(wic_registry_hive) - 1, &wic_errors );
+    }
     horizon_registry_move_hives( HORIZON_REGISTRY_DIR );
     horizon_registry_load_hive( machine, HORIZON_REGISTRY_SUBDIR "system.reg" );
     horizon_registry_load_hive( user, HORIZON_REGISTRY_SUBDIR "user.reg" );

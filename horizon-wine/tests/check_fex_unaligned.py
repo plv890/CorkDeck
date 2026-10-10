@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+import arm64_host
 
 horizon_wine = Path(__file__).resolve().parents[1]
 source = Path(os.environ.get('WINE_NX_FEX_DIR', horizon_wine / 'toolchains/fex-2609'))
@@ -120,10 +121,16 @@ int main() {
         uint64_t expected = 0x1234, value = 0;
         auto* address = data + 1 + (offset ? 3 : 0);
         if (!store) std::memcpy(address, &expected, 1u << size);
+#ifndef FEX_TEST_EMULATED
         auto run = reinterpret_cast<uint64_t (*)(void*, uint64_t)>(rx + 64);
         assert(run(data + 1, expected) == expected);
         std::memcpy(&value, address, 1u << size);
         assert(value == expected);
+#else
+        /* qemu's user mode keeps its translation of code rewritten through the
+         * other mapping, so there the patched code is checked, not run. */
+        (void)address; (void)value; (void)expected;
+#endif
       }
     }
   }
@@ -145,7 +152,11 @@ int main() {
     assert(!tail->SpinLockFutex && code[1] == (LDR_INST | (3u << 30) | 1) && code[2] == DMB_LD);
   }
   assert(!wine_nx_fex_jit_close(rx));
+#ifndef FEX_TEST_EMULATED
   puts("FEX unaligned access: RX lock, load/store patching, barriers, execution and contention passed");
+#else
+  puts("FEX unaligned access: RX lock, load/store patching, barriers and contention passed (emulated: the patched code is not run)");
+#endif
 }
 '''
 
@@ -153,14 +164,15 @@ with tempfile.TemporaryDirectory(prefix='fex-unaligned-') as temp:
     build = Path(temp)
     cpp = build / 'unaligned.cpp'
     cpp.write_text(fixture + handler + tests)
-    sanitizers = ['-fsanitize=address,undefined', '-fno-sanitize=function']
-    subprocess.run([os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang'), '-g', '-pthread',
+    sanitizers = arm64_host.flags(['-fsanitize=address,undefined', '-fno-sanitize=function'])
+    subprocess.run(arm64_host.compiler(os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang')) + ['-g', '-pthread',
                     *sanitizers, '-c', str(horizon_wine / 'source/fex_jit.c'), '-o', str(build / 'jit.o')], check=True)
-    subprocess.run([os.environ.get('WINE_NX_HOST_CXX', '/usr/bin/clang++'), '-std=c++20', '-O2', '-g',
-                    '-pthread', *sanitizers, '-DFEX_HORIZON', '-DARCHITECTURE_arm64',
+    subprocess.run(arm64_host.compiler(os.environ.get('WINE_NX_HOST_CXX', '/usr/bin/clang++'), cxx=True) + ['-std=c++20', '-O2', '-g',
+                    '-pthread', *sanitizers, *([] if arm64_host.NATIVE else ['-DFEX_TEST_EMULATED']),
+                    '-DFEX_HORIZON', '-DARCHITECTURE_arm64',
                     '-DFEX_DISABLE_TELEMETRY', '-DFMT_HEADER_ONLY',
                     '-I', str(source / 'CodeEmitter'), '-I', str(source / 'FEXCore/include'),
                     '-I', str(source / 'FEXHeaderUtils'), '-I', str(source / 'External/fmt/include'),
                     '-I', str(horizon_wine / 'source'), str(cpp), str(build / 'jit.o'),
                     '-o', str(build / 'unaligned')], check=True)
-    subprocess.run([str(build / 'unaligned')], check=True, timeout=60)
+    subprocess.run(arm64_host.run(build / 'unaligned'), check=True, timeout=300)

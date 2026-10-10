@@ -193,6 +193,13 @@ static bool request_stats() {
     const auto*b=(const unsigned char*)&v;
     results.push_back({next_call++,UserStatsReceived_t::k_iCallback,{b,b+sizeof(v)},false}); return true;
 }
+/* How a Visual C++ game calls a member function: its object in a register, the
+ * rest on the stack, cleared by the function called. See generate.py. */
+#if defined(__i386__)
+#define ABI_THISCALL __attribute__((thiscall))
+#else
+#define ABI_THISCALL
+#endif
 #include "interfaces.inc"
 static void *lookup(const char *version) {
     if(!ready || !version)return nullptr;
@@ -240,6 +247,24 @@ S_API_EXPORT ISteamMatchmaking* SteamMatchmaking(){return (ISteamMatchmaking*)le
 S_API_EXPORT ISteamMatchmakingServers* SteamMatchmakingServers(){return (ISteamMatchmakingServers*)legacy("matchmakingservers",STEAMMATCHMAKINGSERVERS_INTERFACE_VERSION);}
 S_API_EXPORT ISteamNetworking* SteamNetworking(){return (ISteamNetworking*)legacy("networking",STEAMNETWORKING_INTERFACE_VERSION);}
 S_API_EXPORT ISteamGameServer* SteamGameServer(){return (ISteamGameServer*)legacy("gameserver",STEAMGAMESERVER_INTERFACE_VERSION);}
+S_API_EXPORT ISteamUGC* SteamUGC(){return (ISteamUGC*)legacy("ugc",STEAMUGC_INTERFACE_VERSION);}
+S_API_EXPORT ISteamHTTP* SteamHTTP(){return (ISteamHTTP*)legacy("http",STEAMHTTP_INTERFACE_VERSION);}
+S_API_EXPORT ISteamController* SteamController(){return (ISteamController*)legacy("controller",STEAMCONTROLLER_INTERFACE_VERSION);}
+S_API_EXPORT ISteamInventory* SteamInventory(){return (ISteamInventory*)legacy("inventory",STEAMINVENTORY_INTERFACE_VERSION);}
+S_API_EXPORT ISteamMusic* SteamMusic(){return (ISteamMusic*)legacy("music",STEAMMUSIC_INTERFACE_VERSION);}
+S_API_EXPORT ISteamMusicRemote* SteamMusicRemote(){return (ISteamMusicRemote*)legacy("musicremote",STEAMMUSICREMOTE_INTERFACE_VERSION);}
+S_API_EXPORT ISteamVideo* SteamVideo(){return (ISteamVideo*)legacy("video",STEAMVIDEO_INTERFACE_VERSION);}
+S_API_EXPORT ISteamAppList* SteamAppList(){return (ISteamAppList*)legacy("applist",STEAMAPPLIST_INTERFACE_VERSION);}
+S_API_EXPORT ISteamHTMLSurface* SteamHTMLSurface(){return (ISteamHTMLSurface*)legacy("htmlsurface",STEAMHTMLSURFACE_INTERFACE_VERSION);}
+S_API_EXPORT ISteamUnifiedMessages* SteamUnifiedMessages(){return (ISteamUnifiedMessages*)legacy("unifiedmessages",STEAMUNIFIEDMESSAGES_INTERFACE_VERSION);}
+S_API_EXPORT ISteamGameServerStats* SteamGameServerStats(){return (ISteamGameServerStats*)legacy("gameserverstats",STEAMGAMESERVERSTATS_INTERFACE_VERSION);}
+S_API_EXPORT ISteamParentalSettings* SteamParentalSettings(){return (ISteamParentalSettings*)legacy("parentalsettings",STEAMPARENTALSETTINGS_INTERFACE_VERSION);}
+S_API_EXPORT ISteamUtils* SteamGameServerUtils(){return (ISteamUtils*)legacy("utils",STEAMUTILS_INTERFACE_VERSION);}
+S_API_EXPORT ISteamNetworking* SteamGameServerNetworking(){return (ISteamNetworking*)legacy("networking",STEAMNETWORKING_INTERFACE_VERSION);}
+S_API_EXPORT ISteamHTTP* SteamGameServerHTTP(){return (ISteamHTTP*)legacy("http",STEAMHTTP_INTERFACE_VERSION);}
+S_API_EXPORT ISteamUGC* SteamGameServerUGC(){return (ISteamUGC*)legacy("ugc",STEAMUGC_INTERFACE_VERSION);}
+S_API_EXPORT ISteamInventory* SteamGameServerInventory(){return (ISteamInventory*)legacy("inventory",STEAMINVENTORY_INTERFACE_VERSION);}
+S_API_EXPORT ISteamApps* SteamGameServerApps(){return (ISteamApps*)legacy("apps",STEAMAPPS_INTERFACE_VERSION);}
 S_API_EXPORT void SteamGameServer_Shutdown(){}
 S_API_EXPORT void S_CALLTYPE SteamAPI_RegisterCallback(CCallbackBase*p,int id){Guard g; if(p&&registrations.size()<128){registrations.erase(std::remove_if(registrations.begin(),registrations.end(),[p](auto&r){return r.ptr==p&&!r.call;}),registrations.end());CCallbackMgr::register_callback(p,id);registrations.push_back({p,id,0});}}
 S_API_EXPORT void S_CALLTYPE SteamAPI_UnregisterCallback(CCallbackBase*p){Guard g;if(p)CCallbackMgr::unregister_callback(p);registrations.erase(std::remove_if(registrations.begin(),registrations.end(),[p](auto&r){return r.ptr==p&&!r.call;}),registrations.end());}
@@ -263,6 +288,6 @@ S_API_EXPORT ESteamAPIInitResult S_CALLTYPE SteamInternal_SteamAPI_Init(const ch
 }
 #include "flat.inc"
 BOOL WINAPI DllMain(HINSTANCE instance,DWORD reason,void*) {
-    if(reason==DLL_PROCESS_ATTACH){module=instance;InitializeCriticalSection(&mutex);DWORD n=GetModuleFileNameA(module,directory,sizeof(directory));if(!n||n>=sizeof(directory))return FALSE;char*p=strrchr(directory,'\\');if(!p)return FALSE;*p=0;snprintf(config,sizeof(config),"%s\\autorun-steam.ini",directory);}
+    if(reason==DLL_PROCESS_ATTACH){module=instance;InitializeCriticalSection(&mutex);abi_fix_all();DWORD n=GetModuleFileNameA(module,directory,sizeof(directory));if(!n||n>=sizeof(directory))return FALSE;char*p=strrchr(directory,'\\');if(!p)return FALSE;*p=0;snprintf(config,sizeof(config),"%s\\autorun-steam.ini",directory);}
     return TRUE;
 }

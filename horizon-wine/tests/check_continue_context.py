@@ -21,8 +21,18 @@ fixture = r'''
 #define CONTEXT_ARM64_X18 0x400010
 typedef union { uint64_t x; } reg;
 typedef struct { reg cpu_gprs[29], fp, lr, sp, pc; uint32_t pstate; unsigned char fpu_gprs[512]; } ThreadExceptionDump;
-typedef struct { uint32_t ContextFlags; uint64_t X[29], Fp, Lr, Sp, Pc; uint32_t Cpsr, Fpcr, Fpsr; unsigned char V[512]; } CONTEXT;
+typedef uintptr_t ULONG_PTR;
+typedef struct {
+    uint32_t ContextFlags;
+    union { struct { uint64_t X0_17[18], X18, X19_28[10]; }; uint64_t X[29]; };
+    uint64_t Fp, Lr, Sp, Pc; uint32_t Cpsr, Fpcr, Fpsr; unsigned char V[512];
+} CONTEXT;
 static ThreadExceptionDump result;
+/* Under FEX the translator continues the context; it gets the same x18 rule. */
+static int uses_fex, fex_calls;
+static CONTEXT fex_resume;
+static int horizon_uses_fex(void) { return uses_fex; }
+static void wine_nx_fex_continue_context(const CONTEXT *context) { fex_resume = *context; fex_calls++; }
 static void *NtCurrentTeb(void) { return (void *)0x7ffc0000; }
 static void horizon_restore_exception_context(ThreadExceptionDump *dump) { result = *dump; }
 '''
@@ -40,7 +50,14 @@ int main(void) {
     ctx.ContextFlags |= CONTEXT_ARM64_X18;
     horizon_continue_context(&ctx);
     assert(result.cpu_gprs[18].x == 118);
-    puts("NtContinue context conversion: integer/control/SIMD and implicit/explicit x18 passed");
+    assert(!fex_calls);
+    uses_fex = 1;
+    horizon_continue_context(&ctx);
+    assert(fex_calls == 1 && fex_resume.X18 == 118 && fex_resume.Pc == 500);
+    ctx.ContextFlags = 0x400007;
+    horizon_continue_context(&ctx);
+    assert(fex_calls == 2 && fex_resume.X18 == 0x7ffc0000 && fex_resume.X[17] == 117 && ctx.X18 == 118);
+    puts("NtContinue context conversion: integer/control/SIMD and implicit/explicit x18, natively and under FEX, passed");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='wine-nx-continue-') as tmp:

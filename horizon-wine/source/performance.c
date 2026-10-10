@@ -24,7 +24,9 @@ static const char *names[NX_PERF_KINDS] = {"qpc", "nt-wait", "nt-delay", "vk-pre
 #ifndef static_assert   /* libnx's service calls with buffers use it */
 #define static_assert _Static_assert
 #endif
-/* What Horizon OC itself says beside the clocks read above: the power mode it
+/* Reading only, here and above: nothing in this application sets a clock
+ * (tests/check_no_clock_control.py holds it to that).
+ * What Horizon OC itself says beside the clocks read above: the power mode it
  * is in, the clocks it aims at and the ones it set, its list of graphics
  * clocks, load and temperature. A clock that stays below the profile's is
  * explained here or nowhere: the mode, the list, the governor and the heat
