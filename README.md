@@ -30,7 +30,7 @@ Fallout 3 (Steam version) at its main menu on a Nintendo Switch, started from Co
 
 ## Download and install
 
-1. Download **`CorkDeck-0.3b.zip`** from [Releases](https://github.com/plv890/CorkDeck/releases/latest). The "Source code" archives on that page are for developers; the installable package is the ZIP named CorkDeck.
+1. Download **`CorkDeck-0.3c.zip`** from [Releases](https://github.com/plv890/CorkDeck/releases/latest). The "Source code" archives on that page are for developers; the installable package is the ZIP named CorkDeck.
 2. Extract it and copy the `switch` folder to the root of the SD card.
 3. Open the Homebrew Menu over a game (hold **R** while starting one), start `wine-nx-runtime` and follow First set-up. It adds a CorkDeck entry to the HOME menu and downloads the Windows components.
 
@@ -96,7 +96,7 @@ CorkDeck keeps Autorun's runtime, the part that actually executes Windows code, 
 
 **Removed:** the application no longer updates itself over the network. A new version is installed by replacing one file.
 
-CorkDeck is not a drop-in replacement: both projects use the `switch/wine` folder, so install one or the other. See [FORK.md](FORK.md) for the fork point and [docs/RELEASE-0.3.md](docs/RELEASE-0.3.md) for this version's changes (the quick update 0.3b: [RELEASE-0.3b](docs/RELEASE-0.3b.md); 0.2: [RELEASE-0.2](docs/RELEASE-0.2.md)).
+CorkDeck is not a drop-in replacement: both projects use the `switch/wine` folder, so install one or the other. See [FORK.md](FORK.md) for the fork point and [docs/RELEASE-0.3.md](docs/RELEASE-0.3.md) for this version's changes (the quick updates: [0.3b](docs/RELEASE-0.3b.md), [0.3c](docs/RELEASE-0.3c.md); 0.2: [RELEASE-0.2](docs/RELEASE-0.2.md)).
 
 If something is broken in CorkDeck, please report it [here](https://github.com/plv890/CorkDeck/issues) and not to the Autorun project. They did not write the parts CorkDeck changed.
 

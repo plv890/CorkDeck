@@ -30,7 +30,7 @@ Fallout 3 (версия из Steam) в главном меню на Nintendo Swi
 
 ## Скачать и установить
 
-1. Скачайте **`CorkDeck-0.3b.zip`** в разделе [Releases](https://github.com/plv890/CorkDeck/releases/latest). Архивы «Source code» там же — для разработчиков; для установки нужен именно ZIP с именем CorkDeck.
+1. Скачайте **`CorkDeck-0.3c.zip`** в разделе [Releases](https://github.com/plv890/CorkDeck/releases/latest). Архивы «Source code» там же — для разработчиков; для установки нужен именно ZIP с именем CorkDeck.
 2. Распакуйте его и скопируйте папку `switch` в корень карты памяти.
 3. Откройте Homebrew Menu через игру (держите **R** при её запуске), запустите `wine-nx-runtime` и пройдите первичную настройку: она поставит значок CorkDeck в меню HOME и скачает компоненты Windows.
 
@@ -88,7 +88,7 @@ CorkDeck сохраняет от Autorun то, что исполняет Windows
 
 **Убрано:** приложение больше не обновляет себя из сети. Новая версия ставится заменой одного файла.
 
-CorkDeck не ставится поверх Autorun: оба используют папку `switch/wine`, поэтому на карте должен быть один из них. Точка ответвления описана в [FORK.md](FORK.md), изменения этой версии — в [docs/RELEASE-0.3.md](docs/RELEASE-0.3.md) (быстрое обновление 0.3b — [RELEASE-0.3b](docs/RELEASE-0.3b.ru.md); 0.2 — [RELEASE-0.2](docs/RELEASE-0.2.md)).
+CorkDeck не ставится поверх Autorun: оба используют папку `switch/wine`, поэтому на карте должен быть один из них. Точка ответвления описана в [FORK.md](FORK.md), изменения этой версии — в [docs/RELEASE-0.3.md](docs/RELEASE-0.3.md) (быстрые обновления — [0.3b](docs/RELEASE-0.3b.ru.md), [0.3c](docs/RELEASE-0.3c.ru.md); 0.2 — [RELEASE-0.2](docs/RELEASE-0.2.md)).
 
 Если что-то сломано в CorkDeck, пишите [сюда](https://github.com/plv890/CorkDeck/issues), а не авторам Autorun: изменённые части писали не они.
 

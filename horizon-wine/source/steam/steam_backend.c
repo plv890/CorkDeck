@@ -196,16 +196,24 @@ fail:
   *code = 0;
   return 0;
 }
+/* A content server is whichever host Steam names over the signed-in session:
+ * Valve's own under steamcontent.com in some regions, a contracted network's
+ * (another domain) in others. It is taken for what it is, a plain DNS name;
+ * what it serves is encrypted with the depot key and every chunk is checked
+ * against the manifest, so the name is not what the content is trusted by. */
 static int hostname(const char *s) {
-  const char *suffix = ".steamcontent.com";
-  size_t n = strlen(s), tail = strlen(suffix), i;
-  if (n <= tail || strcmp(s + n - tail, suffix))
+  size_t n = strlen(s), i, dots = 0;
+  if (n < 4 || n >= 128 || s[0] == '.' || s[0] == '-' || s[n - 1] == '.' ||
+      s[n - 1] == '-')
     return 0;
-  for (i = 0; i < n; ++i)
+  for (i = 0; i < n; ++i) {
     if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') ||
           s[i] == '.' || s[i] == '-'))
       return 0;
-  return 1;
+    if (s[i] == '.' && (++dots, s[i - 1] == '.'))
+      return 0;
+  }
+  return dots > 0;
 }
 int steam_backend_servers(struct steam_backend *b, char hosts[8][128],
                           size_t *count) {
@@ -226,35 +234,61 @@ int steam_backend_servers(struct steam_backend *b, char hosts[8][128],
   r = (struct steam_wire_reader){m.body, m.body_size, 0, 0};
   while ((n = steam_wire_next(&r, &f)) == 1)
     if (f.number == 1) {
-      char host[128] = {0}, type[16] = {0}, https[16] = {0};
+      char host[128] = {0}, virtual[128] = {0}, type[16] = {0}, https[16] = {0};
       unsigned int seen = 0;
+      int unusable = 0;
+      size_t i;
       if (f.type != 2)
         return 0;
       s = (struct steam_wire_reader){f.data, f.size, 0, 0};
+      /* An entry this cannot use is passed over; it does not spoil the list.
+       * Passed over: a server for Steam China only, a proxy, one kept for a
+       * list of applications, and one reached under another name than its
+       * address (the request here carries one name). */
       while (steam_wire_next(&s, &v) == 1) {
         unsigned int bit = v.number == 1    ? 1
                            : v.number == 8  ? 2
                            : v.number == 12 ? 4
+                           : v.number == 9  ? 8
                                             : 0;
         char *out;
         size_t cap;
+        if ((v.number == 7 || v.number == 10) && v.type == 0 && v.integer)
+          unusable = 1;
+        if (v.number == 13)
+          unusable = 1;
         if (!bit)
           continue;
-        if (v.type != 2 || seen & bit)
-          return 0;
+        if (v.type != 2 || seen & bit) {
+          unusable = 1;
+          continue;
+        }
         seen |= bit;
-        out = bit == 1 ? type : bit == 2 ? host : https;
-        cap = bit == 2 ? sizeof(host) : sizeof(type);
-        if (v.size >= cap || memchr(v.data, 0, v.size))
-          return 0;
+        out = bit == 1 ? type : bit == 2 ? host : bit == 4 ? https : virtual;
+        cap = bit == 2 || bit == 8 ? sizeof(host) : sizeof(type);
+        if (v.size >= cap || memchr(v.data, 0, v.size)) {
+          unusable = 1;
+          continue;
+        }
         memcpy(out, v.data, v.size);
       }
       if (s.failed)
         return 0;
-      /* Depot content is encrypted with the depot key and every chunk is
+      for (i = 0; host[i]; ++i)
+        if (host[i] >= 'A' && host[i] <= 'Z')
+          host[i] += 'a' - 'A';
+      for (i = 0; virtual[i]; ++i)
+        if (virtual[i] >= 'A' && virtual[i] <= 'Z')
+          virtual[i] += 'a' - 'A';
+      if (virtual[0] && strcmp(virtual, host))
+        unusable = 1;
+      /* Valve's own servers are "SteamCache", a contracted network's "CDN";
+       * the Steam client downloads from both.
+       * Depot content is encrypted with the depot key and every chunk is
        * checked against the manifest, so the Steam client fetches it over
        * plain HTTP wherever the server allows; so does this installer. */
-      if (!strcmp(type, "CDN") && hostname(host) && *count < 8) {
+      if (!unusable && (!strcmp(type, "CDN") || !strcmp(type, "SteamCache")) &&
+          hostname(host) && *count < 8) {
         if (strcmp(https, "mandatory"))
           plain |= 1u << *count;
         if (!strcmp(https, "mandatory") || !strcmp(https, "optional"))
