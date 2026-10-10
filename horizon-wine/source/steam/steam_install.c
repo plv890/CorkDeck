@@ -30,6 +30,8 @@ enum {
   INSTALL_CDN,
   INSTALL_CANCELLED
 };
+/* 1000 + Steam's result 15: the account has no licence for what was asked. */
+#define STEAM_ACCESS_DENIED 1015u
 /* One worker owns this handle for an entire installation. Resetting options
  * retains libcurl's connection/DNS/TLS caches without retaining request data. */
 struct cdn_session {
@@ -700,10 +702,6 @@ static int run_file(struct depot_run *r) {
     r->parent[0] = 0;
     return 1;
   }
-  if (mapping->size > UINT32_MAX) { /* FAT32-safe initial policy. */
-    v->error = INSTALL_UNSUPPORTED;
-    return -1;
-  }
   steam_engine_status(r->engine, &e);
   /* A second entry for a name waits for the first: the later one wins, as it
    * did when files were written one after another. */
@@ -1113,6 +1111,78 @@ static void console_for_download(int on) {
   (void)on;
 #endif
 }
+/* A depot shared with another application has its manifest listed there. */
+static int shared_manifests(struct steam_backend *backend, uint32_t appid,
+                            struct steam_app *app) {
+  size_t i, j;
+  for (i = 0; i < app->count; ++i)
+    if (!app->depots[i].manifest && app->depots[i].source_app != appid) {
+      struct steam_app shared;
+      if (!steam_backend_app(backend, app->depots[i].source_app, &shared))
+        return 0;
+      for (j = 0; j < shared.count; ++j)
+        if (shared.depots[j].id == app->depots[i].id) {
+          app->depots[i].manifest = shared.depots[j].manifest;
+          app->depots[i].size = shared.depots[j].size;
+          break;
+        }
+    }
+  return 1;
+}
+/* An application lists every depot it has, and an account's licence covers
+ * some of them: the files of an add-on sold separately, a language sold in
+ * one region. Steam installs what the licence covers, and so does this: a
+ * depot whose key Steam refuses is left out. What is left has to hold some of
+ * the game itself: the application most of the bytes come from (the game's
+ * own, or the one it shares its files with) must have a depot among them, or
+ * the game is not this account's. Returns 0 with the error set, or 1 with
+ * *language set when a refused depot held the chosen language. */
+static int licensed_depots(struct steam_backend *backend, uint32_t appid,
+                           struct steam_app *app,
+                           const struct steam_install_callbacks *cb,
+                           unsigned int *error, int *language) {
+  size_t i, j, kept = 0, own = 0;
+  uint32_t main_app = 0;
+  uint64_t most = 0;
+  *language = 0;
+  for (i = 0; i < app->count; ++i) {
+    uint64_t bytes = 0;
+    for (j = 0; j < app->count; ++j)
+      if (app->depots[j].source_app == app->depots[i].source_app)
+        bytes += app->depots[j].size;
+    if (!i || bytes > most) {
+      most = bytes;
+      main_app = app->depots[i].source_app;
+    }
+  }
+  for (i = 0; i < app->count; ++i) {
+    unsigned char key[32];
+    uint64_t code;
+    if (!tick(cb)) {
+      *error = INSTALL_CANCELLED;
+      return 0;
+    }
+    if (!app->depots[i].manifest) {
+      *error = INSTALL_UNSUPPORTED;
+      return 0;
+    }
+    if (steam_backend_depot(backend, appid, &app->depots[i], key, &code)) {
+      memset(key, 0, sizeof(key));
+      own += app->depots[i].source_app == main_app;
+      app->depots[kept++] = app->depots[i];
+    } else if (backend->error != STEAM_ACCESS_DENIED) {
+      *error = backend->error;
+      return 0;
+    } else if (app->depots[i].language_specific && !app->depots[i].optional)
+      *language = 1;
+  }
+  app->count = kept;
+  if (!own) {
+    *error = STEAM_ACCESS_DENIED;
+    return 0;
+  }
+  return 1;
+}
 int steam_install_run(struct steam_backend *backend, const char *root,
                       uint32_t appid,
                       const struct steam_install_callbacks *original) {
@@ -1181,21 +1251,10 @@ int steam_install_run(struct steam_backend *backend, const char *root,
   }
   if (app.executable[0] && !steam_content_path(app.executable))
     app.executable[0] = 0;
-  for (i = 0; i < app.count; ++i)
-    if (!app.depots[i].manifest && app.depots[i].source_app != appid) {
-      struct steam_app shared;
-      size_t j;
-      if (!steam_backend_app(backend, app.depots[i].source_app, &shared)) {
-        v.error = backend->error;
-        goto done;
-      }
-      for (j = 0; j < shared.count; ++j)
-        if (shared.depots[j].id == app.depots[i].id) {
-          app.depots[i].manifest = shared.depots[j].manifest;
-          app.depots[i].size = shared.depots[j].size;
-          break;
-        }
-    }
+  if (!shared_manifests(backend, appid, &app)) {
+    v.error = backend->error;
+    goto done;
+  }
   snprintf(suffix, sizeof(suffix), "steam/staging/%u", appid);
   if (!path(stage, sizeof(stage), root, suffix))
     goto path_error;
@@ -1211,6 +1270,25 @@ int steam_install_run(struct steam_backend *backend, const char *root,
     v.error = INSTALL_UNSUPPORTED;
     goto done;
   } /* Updates require a separate validated transaction. */
+  {
+    int language;
+    if (!licensed_depots(backend, appid, &app, cb, &v.error, &language))
+      goto done;
+    /* The chosen language is not in the licence: English, as when the game
+     * has no files in that language at all. */
+    if (language && strcmp(backend->language, "english") &&
+        app.english_available) {
+      snprintf(backend->language, sizeof(backend->language), "english");
+      snprintf(v.language, sizeof(v.language), "english");
+      if (!steam_backend_app(backend, appid, &app) ||
+          !shared_manifests(backend, appid, &app)) {
+        v.error = backend->error;
+        goto done;
+      }
+      if (!licensed_depots(backend, appid, &app, cb, &v.error, &language))
+        goto done;
+    }
+  }
   snprintf(suffix, sizeof(suffix), "steam/manifests/%u", appid);
   if (!path(cache, sizeof(cache), root, suffix))
     goto path_error;
@@ -1313,10 +1391,6 @@ int steam_install_run(struct steam_backend *backend, const char *root,
         }
         if (mapping.flags & 64)
           continue;
-        if (mapping.size > UINT32_MAX) {
-          v.error = INSTALL_UNSUPPORTED;
-          goto done;
-        }
         if (!strcasecmp(mapping.path, "autorun-steam-install.ini") ||
             !strcasecmp(mapping.path, STEAM_ENGINE_JOURNAL)) {
           v.error = INSTALL_PATH;

@@ -1799,6 +1799,50 @@ static int sh_dependencies( struct launcher *l, struct program *p )
     return ui_confirm( ui, sh_tr( "Microsoft libraries" ), text, sh_tr( "Play anyway" ) ) ? 0 : -1;
 }
 
+/* A game of the first Steam generation loads Valve's own Steam.dll. That file
+ * is Valve's to distribute, so it is not in the package: the first time a
+ * program needs it, Valve's package of client libraries is fetched from
+ * Valve's update server, checked, and the one file is taken out of it -- for
+ * any such program, with nothing to look for. Returns -1 when the user chose
+ * not to start, 0 to go on. */
+static int sh_legacy_steam( struct launcher *l, struct program *p )
+{
+    struct ui *ui = &l->ui;
+    struct steam_legacy_context context;
+    const char *root = l->options->runtime_dir;
+    char folder[600], target[640], text[600];
+    unsigned int error;
+
+    if (steam_legacy_prepare( root, p->path, p->machine, &context ) != STEAM_LOCAL_PAYLOAD_MISSING) return 0;
+    launcher_log( "[SHELL] \"%s\" needs the Steam.dll of the old Steam client", p->title );
+    error = steam_prerequisites_fetch_ui( ui, root, STEAM_PREREQ_STEAM_CLIENT );
+    if (error == STEAM_PREREQ_CANCELLED) return -1;
+    if (!error)
+    {
+        snprintf( folder, sizeof(folder), "%s/steamworks-local", root );
+        mkdir( folder, 0777 );
+        snprintf( folder, sizeof(folder), "%s/steamworks-local/legacy-client", root );
+        mkdir( folder, 0777 );
+        snprintf( target, sizeof(target), "%s/Steam.dll", folder );
+        error = steam_prereq_extract( root, STEAM_PREREQ_STEAM_CLIENT, "Steam.dll", target,
+                                      STEAM_LEGACY_DLL_SIZE, STEAM_LEGACY_DLL_SHA256 );
+        /* Sixty megabytes for one file of half a megabyte: not kept. */
+        if (!error) steam_prereq_discard( root, STEAM_PREREQ_STEAM_CLIENT );
+    }
+    if (!error && steam_legacy_prepare( root, p->path, p->machine, &context ) == STEAM_LOCAL_PAYLOAD_MISSING)
+        error = STEAM_PREREQ_PROBE_MISSING;
+    launcher_log( "[SHELL] Steam.dll of the old Steam client for \"%s\": error %u", p->title, error );
+    if (!error)
+    {
+        ui_toast( ui, "The Steam library for older games was added", 3000 );
+        return 0;
+    }
+    snprintf( text, sizeof(text),
+              sh_tr( "This game needs the Steam library of older games, and it could not be added: error %u. Check the internet connection and press Play again. The game may not start without it." ),
+              error );
+    return ui_confirm( ui, sh_tr( "Steam library" ), text, sh_tr( "Play anyway" ) ) ? 0 : -1;
+}
+
 /* Returns 1 with target set when the program is to start. */
 static int sh_app_page( struct launcher *l, int index, char *target, size_t size )
 {
@@ -1851,7 +1895,7 @@ static int sh_app_page( struct launcher *l, int index, char *target, size_t size
                                     sh_tr( "The program's file is not where it was. Connect its drive, or use Manage > Locate the program." ) );
                     else
                     {
-                        if (!sh_dependencies( l, p ) && start_program( l, p, target, size )) return 1;
+                        if (!sh_legacy_steam( l, p ) && !sh_dependencies( l, p ) && start_program( l, p, target, size )) return 1;
                     }
                     ui_start_screen( ui );
                 }

@@ -51,7 +51,7 @@ static const char *download_error(unsigned int e) {
   case 3104:
     return "Unsafe or unsupported installation path.";
   case 3105:
-    return "Unsupported depot, file over 4 GiB, or existing installation.";
+    return "Unsupported files, or the game is already installed.";
   case 3106:
     return "Steam CDN/network error. Check Wi-Fi and retry.";
   case 3107:

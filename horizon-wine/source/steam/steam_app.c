@@ -158,8 +158,13 @@ static int leaf(struct kv *k, unsigned int depth, const char *value) {
         return 0;
       d->dlc_app = (uint32_t)v;
     }
-    /* Steam installs an optional depot only on request: a regional or
-     * low-violence copy the account's package usually does not contain. */
+    /* An optional depot is one not every package of the game contains: a
+     * regional or low-violence copy, or the game's own programs kept apart
+     * from its data. Whether this account has it is the licence's answer,
+     * which the installer asks for; here it is a candidate like the others,
+     * listed before them so that the game's ordinary files win a name both
+     * have. It counts neither for the size told beforehand nor for which
+     * languages and architectures the game is said to have. */
     if (!strcmp(key, "optional"))
       d->optional = strcmp(value, "0") != 0;
   }
@@ -243,8 +248,11 @@ static int parse(const void *data, size_t size, uint32_t id,
     if (all[i].windows && all[i].language && !all[i].dlc_app &&
         !all[i].optional && all[i].arch64)
       has64 = 1;
-  for (i = 0; i < k.all_count; ++i) {
-    struct steam_depot *d = &all[i];
+  for (i = 0; i < 2 * k.all_count; ++i) {
+    struct steam_depot *d = &all[i % k.all_count];
+    /* Two passes over the depots: the optional ones, then the rest. */
+    if ((i < k.all_count) != (d->optional != 0))
+      continue;
     if(d->windows && !d->dlc_app && !d->optional && !(has64 && d->arch32) && (d->manifest || d->source_app != id)){
       if (d->language_specific) {
         ++language_depots;if(d->language)++selected_language;
@@ -252,14 +260,14 @@ static int parse(const void *data, size_t size, uint32_t id,
         a.available_languages |= d->languages;
       } else a.available_languages |= STEAM_LANGUAGE_BASE;
     }
-    if (!d->windows || !d->language || d->dlc_app || d->optional ||
-        (has64 && d->arch32))
+    if (!d->windows || !d->language || d->dlc_app || (has64 && d->arch32))
       continue;
     if (!d->manifest && d->source_app == id)
       continue;
     if (a.total_size > UINT64_MAX - d->size)
       return 0;
-    a.total_size += d->size;
+    if (!d->optional)
+      a.total_size += d->size;
     if (n == STEAM_DEPOT_LIMIT)
       return 0;
     a.depots[n++] = *d;

@@ -241,7 +241,7 @@ int steam_legacy_program(const char *executable) {
 }
 int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
                          struct steam_legacy_context *context) {
-    static const char steam_hash[]="d9a06d104da9b119207125b61f590eee1618b1d1f84c7322e6202f0fe87b692a";
+    static const char steam_hash[]=STEAM_LEGACY_DLL_SHA256;
     static const char client_hash[]="65c11224b38272d06537f2c90dcc111127335fa563c089e97133e602f42fee87";
     char directory[1024],base[1024],marker[1024],line[256],provider[1024],client[1024];
     char source[1024],target[1024],temp[1100],settings[1024],install_dos[256];
@@ -277,7 +277,7 @@ int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
      * decision made by an earlier start and saves reading the program again. */
     if(!optin){
         if(arch!=0x14c||!join(target,directory,"Steam.dll"))return STEAM_LOCAL_NONE;
-        if(!legacy_matches(target,524952,steam_hash)&&!steam_legacy_program(executable))return STEAM_LOCAL_NONE;
+        if(!legacy_matches(target,STEAM_LEGACY_DLL_SIZE,steam_hash)&&!steam_legacy_program(executable))return STEAM_LOCAL_NONE;
     }
     if(invalid||!app||!owner||(owner>>56)!=1||((owner>>52)&15)!=1||
        ((owner>>32)&0xfffff)>4||!(uint32_t)owner||arch!=0x14c)return STEAM_LOCAL_CONFLICT;
@@ -288,12 +288,12 @@ int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
        !join(client,provider,"steamclient-local.dll")||
        !launcher_dos_path(client,context->client_dos_path,sizeof(context->client_dos_path)))return STEAM_LOCAL_CONFLICT;
     if(!legacy_matches(client,1241600,client_hash)||!join(source,provider,"Steam.dll")||
-       !legacy_matches(source,524952,steam_hash)){
+       !legacy_matches(source,STEAM_LEGACY_DLL_SIZE,steam_hash)){
         memset(context,0,sizeof(*context));return STEAM_LOCAL_PAYLOAD_MISSING;
     }
     if(!join(target,directory,"Steam.dll"))return STEAM_LOCAL_CONFLICT;
     int target_kind=kind(target);
-    if(target_kind<0||(target_kind==1&&!legacy_matches(target,524952,steam_hash)))return STEAM_LOCAL_CONFLICT;
+    if(target_kind<0||(target_kind==1&&!legacy_matches(target,STEAM_LEGACY_DLL_SIZE,steam_hash)))return STEAM_LOCAL_CONFLICT;
     if(!target_kind){
         snprintf(temp,sizeof(temp),"%s.autorun-legacy-part",target);
         if(kind(temp)!=0)return STEAM_LOCAL_CONFLICT;
@@ -301,9 +301,9 @@ int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
         if(ok){while((n=fread(bytes,1,sizeof(bytes),in)))if(fwrite(bytes,1,n,out)!=n){ok=0;break;}
             if(ferror(in)||fflush(out)||fsync(fileno(out)))ok=0;}
         if(in)fclose(in);if(out&&fclose(out))ok=0;
-        if(!ok||!legacy_matches(temp,524952,steam_hash)){unlink(temp);return STEAM_LOCAL_IO;}
+        if(!ok||!legacy_matches(temp,STEAM_LEGACY_DLL_SIZE,steam_hash)){unlink(temp);return STEAM_LOCAL_IO;}
         if(kind(target)!=0){unlink(temp);return STEAM_LOCAL_CONFLICT;}
-        if(!steam_file_replace(temp,target)||!legacy_matches(target,524952,steam_hash))return STEAM_LOCAL_IO;
+        if(!steam_file_replace(temp,target)||!legacy_matches(target,STEAM_LEGACY_DLL_SIZE,steam_hash))return STEAM_LOCAL_IO;
     }
     if(!join(settings,provider,"autorun-steam.ini")||kind(settings)<0)return STEAM_LOCAL_CONFLICT;
     snprintf(temp,sizeof(temp),"%s.part",settings);

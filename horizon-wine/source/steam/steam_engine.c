@@ -269,6 +269,22 @@ static int decode(void *opaque) {
     SDL_UnlockMutex(e->mutex);
   }
 }
+/* A card formatted as FAT32 holds no file of 4 GiB or more. The console's
+ * file system keeps such a file as several parts in a folder it presents as
+ * one file to every program; a file that large is created that way, whatever
+ * the card's format. */
+static FILE *create(const struct steam_engine_file *f) {
+#ifdef __SWITCH__
+  if (f->size > UINT32_MAX) {
+    if (R_FAILED(fsdevCreateFile(f->path, 0, FsCreateOption_BigFile))) {
+      errno = EIO;
+      return NULL;
+    }
+    return fopen(f->path, "r+b");
+  }
+#endif
+  return fopen(f->path, "w+b");
+}
 static int write_chunks(void *opaque) {
   struct worker *w = opaque;
   struct steam_engine *e = w->engine;
@@ -295,9 +311,9 @@ static int write_chunks(void *opaque) {
     SDL_UnlockMutex(e->mutex);
     started = SDL_GetTicks();
     if (!f->stream) {
-      f->stream = fopen(f->path, f->existing ? "r+b" : "w+b");
+      f->stream = f->existing ? fopen(f->path, "r+b") : create(f);
       if (!f->stream && f->existing && errno == ENOENT)
-        f->stream = fopen(f->path, "w+b");
+        f->stream = create(f);
       if (!f->stream)
         error = io_error();
       /* Chunks of a large file arrive in any order; giving it its full size

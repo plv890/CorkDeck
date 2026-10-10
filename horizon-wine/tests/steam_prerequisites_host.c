@@ -173,6 +173,82 @@ static void test_unpack(const char *dir) {
     assert(!access(path, F_OK));
   }
 }
+/* One file out of a ZIP package: stored and deflated members, found by the
+ * archive's directory whatever the case of the name; a file that is not the
+ * one expected, by size or by SHA-256, never takes the target's place. */
+static size_t zip_entry(unsigned char *out, unsigned char *dir, size_t *dir_size,
+                        size_t at, const char *name, const unsigned char *data,
+                        size_t size, int deflated) {
+  unsigned char packed[512];
+  size_t stored = size, n = strlen(name);
+  unsigned char *d = dir + *dir_size;
+  if (deflated) {
+    z_stream z = {0};
+    assert(deflateInit2(&z, 9, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) == Z_OK);
+    z.next_in = (unsigned char *)data;
+    z.avail_in = (uInt)size;
+    z.next_out = packed;
+    z.avail_out = sizeof(packed);
+    assert(deflate(&z, Z_FINISH) == Z_STREAM_END);
+    stored = z.total_out;
+    deflateEnd(&z);
+  } else
+    memcpy(packed, data, size);
+  memset(out + at, 0, 30);
+  memcpy(out + at, "PK\3\4", 4);
+  out[at + 26] = (unsigned char)n;
+  out[at + 28] = 3; /* an extra field the directory does not have */
+  memcpy(out + at + 30, name, n);
+  memset(out + at + 30 + n, 0, 3);
+  memcpy(out + at + 33 + n, packed, stored);
+  memset(d, 0, 46);
+  memcpy(d, "PK\1\2", 4);
+  d[10] = deflated ? 8 : 0;
+  put32(d + 20, (unsigned int)stored);
+  put32(d + 24, (unsigned int)size);
+  d[28] = (unsigned char)n;
+  put32(d + 42, (unsigned int)at);
+  memcpy(d + 46, name, n);
+  *dir_size += 46 + n;
+  return at + 33 + n + stored;
+}
+static void test_zip(const char *dir) {
+  static const char sha[] = "8d2a4c1b0e2e41d2b1d9a3c9b0e0c7f3a1a5a4f3c1c9d0b6a3f1e2d4c5b6a798";
+  unsigned char archive[4096], directory[512], one[300], two[40], digest[32], back[300];
+  char zip[640], target[640], hex[65];
+  size_t at = 0, dir_size = 0, i;
+  FILE *f;
+  for (i = 0; i < sizeof(one); ++i) one[i] = (unsigned char)(i % 7);
+  for (i = 0; i < sizeof(two); ++i) two[i] = (unsigned char)(200 - i);
+  at = zip_entry(archive, directory, &dir_size, at, "other/Steam.dll", two, sizeof(two), 0);
+  at = zip_entry(archive, directory, &dir_size, at, "Steam.dll", one, sizeof(one), 1);
+  at = zip_entry(archive, directory, &dir_size, at, "stored.bin", two, sizeof(two), 0);
+  memcpy(archive + at, directory, dir_size);
+  memset(archive + at + dir_size, 0, 22);
+  memcpy(archive + at + dir_size, "PK\5\6", 4);
+  archive[at + dir_size + 8] = archive[at + dir_size + 10] = 3;
+  put32(archive + at + dir_size + 12, (unsigned int)dir_size);
+  put32(archive + at + dir_size + 16, (unsigned int)at);
+  snprintf(zip, sizeof(zip), "%s/package.zip", dir);
+  write_file(zip, archive, at + dir_size + 22);
+  snprintf(target, sizeof(target), "%s/taken.dll", dir);
+  assert(!mbedtls_sha256_ret(one, sizeof(one), digest, 0));
+  for (i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+  assert(zip_member(zip, "steam.DLL", target, sizeof(one), sha) == STEAM_PREREQ_INTEGRITY && access(target, F_OK));
+  assert(zip_member(zip, "Steam.dll", target, sizeof(one) + 1, hex) == STEAM_PREREQ_INTEGRITY && access(target, F_OK));
+  assert(zip_member(zip, "absent.dll", target, sizeof(one), hex) == STEAM_PREREQ_INTEGRITY && access(target, F_OK));
+  assert(!zip_member(zip, "steam.DLL", target, sizeof(one), hex));
+  assert((f = fopen(target, "rb")) && fread(back, 1, sizeof(back), f) == sizeof(one) && !fclose(f) &&
+         !memcmp(back, one, sizeof(one)));
+  assert(!mbedtls_sha256_ret(two, sizeof(two), digest, 0));
+  for (i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+  assert(!zip_member(zip, "stored.bin", target, sizeof(two), hex));
+  assert((f = fopen(target, "rb")) && fread(back, 1, sizeof(back), f) == sizeof(two) && !fclose(f) &&
+         !memcmp(back, two, sizeof(two)));
+  /* Valve's package is the third of the catalogue, pinned like the others. */
+  assert(steam_prereq_catalog(2) && steam_prereq_catalog(2)->size == 59544006 && !steam_prereq_catalog(3));
+  assert(steam_prereq_extract(dir, 2, "Steam.dll", target, 1, hex) == STEAM_PREREQ_PATH);
+}
 static void test_missing(const char *dir) {
   struct steam_prereq_missing m;
   char root[512], p[640], exe[640];
@@ -221,6 +297,7 @@ int main(void) {
     char extra[] = "/tmp/corkdeck-libraries-XXXXXX", command[128];
     assert(mkdtemp(extra));
     test_unpack(extra);
+    test_zip(extra);
     test_missing(extra);
     snprintf(command, sizeof(command), "rm -rf %s", extra);
     assert(!system(command));
@@ -270,7 +347,7 @@ int main(void) {
   write_file(exe, "MZ", 2);
   assert(!steam_prereq_inspect(game, exe, NULL, &v) && v.architecture == 2 &&
          !v.needs);
-  assert(!steam_prereq_catalog(2));
+  assert(!steam_prereq_catalog(3));
   assert(!steam_prereq_cached(root, 0));
   assert(steam_prereq_prepare(root, 0, 0, out) == STEAM_PREREQ_INTEGRITY);
   struct steam_prereq_callbacks cb = {.cancel = yes};

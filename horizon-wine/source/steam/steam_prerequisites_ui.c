@@ -57,7 +57,10 @@ static unsigned int fetch(struct ui *ui, const char *root, unsigned int arch) {
     SDL_UnlockMutex(t.mutex);
     ui_background(ui);
     ui_header_back(ui, "Game dependencies", steam_prereq_catalog(arch)->name);
-    ui_text(ui, ui->normal, 84, 210, "Downloading verified Microsoft installer",
+    ui_text(ui, ui->normal, 84, 210,
+            arch == STEAM_PREREQ_STEAM_CLIENT
+                ? "Downloading the Steam client library from Valve"
+                : "Downloading verified Microsoft installer",
             ui->value);
     snprintf(text, sizeof(text), "%.2f / %.2f MiB%s",
              (double)v.downloaded / 1048576, (double)v.total / 1048576,
@@ -69,7 +72,9 @@ static unsigned int fetch(struct ui *ui, const char *root, unsigned int arch) {
                  ui->value);
     ui_text(
         ui, ui->small, 84, 398,
-        "The installer will run through CorkDeck after SHA-256 verification.",
+        arch == STEAM_PREREQ_STEAM_CLIENT
+            ? "Older Steam games need it. It is checked by SHA-256 before use."
+            : "The installer will run through CorkDeck after SHA-256 verification.",
         ui->dim);
     const struct ui_hint hints[] = {{UI_B, "Cancel download"}};
     ui_footer(ui, hints, 1);

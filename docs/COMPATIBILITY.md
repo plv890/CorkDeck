@@ -22,7 +22,8 @@ These are limited observations, not a list of fully playable games.
 - Only Microsoft Visual C++ 2015-2022 is added automatically. Older Visual C++ runtimes, DirectX helper libraries, .NET and XNA are named as missing but not installed.
 - The Windows components are downloaded from the upstream project's DLL repository, at one fixed revision that this version was tested with. If that repository goes away, a new installation cannot complete First set-up.
 - First set-up and a few older screens are in English only.
-- Some legacy Steam titles require a separately supplied `Steam.dll`, absent from the package.
+- Legacy Steam titles need Valve's own `Steam.dll`. It is not in the package; since 0.3b CorkDeck downloads it from Valve's update server the first time such a game is started (not yet exercised on a console).
+- Since 0.3b a Steam game is installed from the file sets the account is licensed for, and files of 4 GiB and more are written as multi-part files. The first was checked on a console; no game with a file that large has been installed on one yet.
 - Automatic CorkDeck updates are unavailable.
 
 Recorded host checks for 0.3: 108 passed, 1 skipped, none failed. The skipped check needs a native AArch64 machine with FEX's core built for it; the fixtures that run ARM64 code were run under an emulator, without sanitizers. (0.2 recorded 80 passed and 26 failed; those failures were stale fixtures and missing sources on the test host, and are repaired in 0.3.)

@@ -57,7 +57,9 @@ static void appinfo(void) {
   assert(!steam_app_parse(kv, strlen(kv) - 1, 100, &a));
   {
     /* Fallout 3's layout: the game, an optional regional copy of it, and an
-     * optional regional copy of an add-on that has no dlcappid of its own. */
+     * optional regional copy of an add-on that has no dlcappid of its own.
+     * The optional ones are candidates the licence decides about, listed
+     * first so that the game's ordinary files win, and not in the size. */
     const char *optional =
         "\"appinfo\" { \"depots\" { \"22301\" { \"manifests\" { \"public\" "
         "{ \"gid\" \"11\" \"size\" \"7\" } } } \"22305\" { \"optional\" "
@@ -65,7 +67,8 @@ static void appinfo(void) {
         "} } \"22405\" { \"manifests\" { \"public\" { \"gid\" \"13\" "
         "\"size\" \"3\" } } \"optional\" \"1\" } } }";
     assert(steam_app_parse(optional, strlen(optional), 22300, &a));
-    assert(a.count == 1 && a.depots[0].id == 22301 && a.total_size == 7);
+    assert(a.count == 3 && a.depots[0].id == 22305 && a.depots[1].id == 22405 &&
+           a.depots[2].id == 22301 && a.total_size == 7);
   }
 }
 static void content(void) {

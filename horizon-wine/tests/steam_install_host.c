@@ -7,7 +7,7 @@
 #include <sys/statvfs.h>
 static int low_disk;
 static int corrupt_responses,corrupt_forever,short_responses;
-static int language_missing;
+static int language_missing, unlicensed, unlicensed_game, shared_game;
 static int (*real_disk)(const char *,struct statvfs *)=statvfs;
 static int fixture_disk(const char *,struct statvfs *);
 #define statvfs(a,b) fixture_disk(a,b)
@@ -94,14 +94,21 @@ int steam_backend_app(struct steam_backend *b, uint32_t app,
   *out = (struct steam_app){.id = app, .windows = 1, .count = 1};
   if(language_missing){out->language_missing=1;out->count=0;out->available_languages=2;return 1;}
   strcpy(out->name,"Fixture: game");
-  out->depots[0] = (struct steam_depot){.id = 124, .manifest = 999};
+  out->depots[0] = (struct steam_depot){.id = 124, .source_app = app, .manifest = 999};
+  /* All of a game's files may be another application's; a small shared
+   * depot beside them does not make a refused game this account's. */
+  if(shared_game){out->depots[0].source_app=77;out->depots[0].size=1000;out->count=2;out->depots[1]=(struct steam_depot){.id=126,.source_app=228980,.manifest=6,.size=10};}
+  if(unlicensed){out->count=2;out->english_available=1;out->depots[1]=(struct steam_depot){.id=125,.source_app=app,.manifest=5,.language=1,.language_specific=1};}
   return 1;
 }
 int steam_backend_depot(struct steam_backend *b, uint32_t app,
                         const struct steam_depot *d, unsigned char out[32],
                         uint64_t *code) {
   (void)app;
-  (void)d;
+  if (unlicensed_game || d->id == 125 || d->id == 126 || (shared_game == 2 && d->id == 124)) {
+    b->error = 1015;
+    return 0;
+  }
   if (deny) {
     b->error = 1009;
     return 0;
@@ -307,6 +314,19 @@ int main(void) {
   explicit_discard=1;requests=0;
   assert(!steam_install_run(&b,root,123,&cb)&&result.state==STEAM_DOWNLOAD_DISCARDED&&!requests&&steam_install_present(root,123));
   explicit_discard=0;
+  /* A depot the licence does not cover is left out, as Steam leaves it; when
+   * it held the chosen language the game is installed in English. A game with
+   * no licensed depot of its own is refused. */
+  assert(!steam_storage_uninstall(root,123,NULL,NULL));requests=0;fixtures(root);unlicensed=1;snprintf(b.language,sizeof(b.language),"russian");
+  assert(steam_install_run(&b,root,123,&cb)&&requests==2&&steam_install_present(root,123)&&!strcmp(result.language,"english")&&!strcmp(b.language,"english"));
+  assert(!steam_storage_uninstall(root,123,NULL,NULL));requests=0;unlicensed_game=1;
+  assert(!steam_install_run(&b,root,123,&cb)&&result.error==1015&&!requests&&!steam_install_present(root,123));
+  unlicensed=unlicensed_game=0;shared_game=1;
+  assert(steam_install_run(&b,root,123,&cb)&&steam_install_present(root,123));
+  assert(!steam_storage_uninstall(root,123,NULL,NULL));requests=0;shared_game=2;
+  assert(!steam_install_run(&b,root,123,&cb)&&result.error==1015&&!requests&&!steam_install_present(root,123));
+  shared_game=0;
+  assert(steam_install_run(&b,root,123,&cb)&&steam_install_present(root,123));
   /* Remove only this test's individually named fixtures. */
   snprintf(p,sizeof(p),"%s/steam/selected/123.exe",root);unlink(p);snprintf(p,sizeof(p),"%s/steam/selected",root);rmdir(p);
   assert(!steam_storage_uninstall(root,123,NULL,NULL));

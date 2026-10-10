@@ -15,7 +15,7 @@
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
-static const struct steam_prereq_catalog catalog[2] = {
+static const struct steam_prereq_catalog catalog[3] = {
     {"Visual C++ v14 (2015-2022), x86", "VC14-x86.exe",
      "https://download.visualstudio.microsoft.com/download/pr/"
      "bd1c8d9d-ba95-4eee-bc6e-df1fcc876373/"
@@ -29,9 +29,17 @@ static const struct steam_prereq_catalog catalog[2] = {
      "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/"
      "VC_redist.x64.exe",
      "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
-     25635768, 0x14c}};
+     25635768, 0x14c},
+    /* Valve's own package of its Windows client's libraries, as its update
+     * server gives it: where the Steam.dll of the first Steam generation
+     * comes from. It is Valve's to distribute, so it is fetched, not shipped. */
+    {"Steam client library (Valve)", "steam-client-win32.zip",
+     "https://client-update.steamstatic.com/"
+     "bins_win32.zip.23e34a6d4b10596a44561a5100dac5585d2517da",
+     "8b712b2a3412a9066b7725f4e1c5cef9a7ca5b187b6585a5b92d25d09df0ba62",
+     59544006, 0x14c}};
 const struct steam_prereq_catalog *steam_prereq_catalog(unsigned int arch) {
-  return arch < 2 ? catalog + arch : NULL;
+  return arch < 3 ? catalog + arch : NULL;
 }
 static int regular(const char *p) {
   struct stat s;
@@ -763,7 +771,7 @@ unsigned int steam_prereq_fetch(const char *root, unsigned int arch,
   OPT(CURLOPT_CONNECTTIMEOUT, 20L);
   OPT(CURLOPT_LOW_SPEED_LIMIT, 1024L);
   OPT(CURLOPT_LOW_SPEED_TIME, 45L);
-  OPT(CURLOPT_TIMEOUT, 300L);
+  OPT(CURLOPT_TIMEOUT, 300L + (long)(c->size / (128u * 1024u)));
   OPT(CURLOPT_NOSIGNAL, 1L);
   OPT(CURLOPT_WRITEFUNCTION, receive);
   OPT(CURLOPT_WRITEDATA, &t);
@@ -814,6 +822,129 @@ done:
   progress(&t);
   return t.view.error;
 #undef OPT
+}
+/* One file out of a fetched package that is a ZIP archive, by the archive's
+ * own directory. The package was checked against its pinned SHA-256, and what
+ * comes out is checked against the size and SHA-256 the caller expects before
+ * it takes the target's place. */
+static unsigned int zip16(const unsigned char *p) { return p[0] | p[1] << 8; }
+static uint32_t zip32(const unsigned char *p) {
+  return zip16(p) | (uint32_t)zip16(p + 2) << 16;
+}
+static unsigned int zip_member(const char *archive, const char *member,
+                               const char *target, uint64_t size,
+                               const char *sha256) {
+  struct steam_prereq_catalog wanted = {.sha256 = sha256, .size = size};
+  char tmp[1100];
+  unsigned char tail[65536 + 22], head[30], *directory = NULL, *packed = NULL,
+                                            *plain = NULL;
+  size_t have, at, names = strlen(member);
+  uint32_t count, bytes, offset, stored = 0, method = 0, local = 0;
+  unsigned int error = STEAM_PREREQ_INTEGRITY, i;
+  int found = 0;
+  struct stat s;
+  FILE *f = NULL, *out;
+  if (!size || size > CAB_LIMIT ||
+      snprintf(tmp, sizeof(tmp), "%s.part", target) >= (int)sizeof(tmp))
+    return STEAM_PREREQ_PATH;
+  if (lstat(archive, &s) || !(f = fopen(archive, "rb")))
+    return STEAM_PREREQ_INTEGRITY;
+  have = (uint64_t)s.st_size < sizeof(tail) ? (size_t)s.st_size : sizeof(tail);
+  if (have < 22 || fseek(f, -(long)have, SEEK_END) ||
+      fread(tail, 1, have, f) != have)
+    goto done;
+  for (at = have - 22; memcmp(tail + at, "PK\5\6", 4); --at)
+    if (!at)
+      goto done;
+  count = zip16(tail + at + 10);
+  bytes = zip32(tail + at + 12);
+  offset = zip32(tail + at + 16);
+  if (!bytes || bytes > CAB_LIMIT || !(directory = malloc(bytes)) ||
+      fseek(f, (long)offset, SEEK_SET) || fread(directory, 1, bytes, f) != bytes)
+    goto done;
+  for (at = 0, i = 0; i < count && bytes - at >= 46; ++i) {
+    const unsigned char *e = directory + at;
+    size_t name = zip16(e + 28), next = 46 + name + zip16(e + 30) + zip16(e + 32);
+    if (memcmp(e, "PK\1\2", 4) || next > bytes - at)
+      goto done;
+    if (name == names && !strncasecmp((const char *)e + 46, member, names)) {
+      method = zip16(e + 10);
+      stored = zip32(e + 20);
+      found = zip32(e + 24) == size;
+      local = zip32(e + 42);
+      break;
+    }
+    at += next;
+  }
+  if (!found || (method != 0 && method != 8) || !stored || stored > CAB_LIMIT ||
+      fseek(f, (long)local, SEEK_SET) || fread(head, 1, 30, f) != 30 ||
+      memcmp(head, "PK\3\4", 4) ||
+      fseek(f, (long)(zip16(head + 26) + zip16(head + 28)), SEEK_CUR) ||
+      !(packed = malloc(stored)) || !(plain = malloc(size)) ||
+      fread(packed, 1, stored, f) != stored)
+    goto done;
+  if (method == 0) {
+    if (stored != size)
+      goto done;
+    memcpy(plain, packed, size);
+  } else {
+    z_stream z = {0};
+    int code;
+    if (inflateInit2(&z, -15) != Z_OK)
+      goto done;
+    z.next_in = packed;
+    z.avail_in = stored;
+    z.next_out = plain;
+    z.avail_out = (uInt)size;
+    code = inflate(&z, Z_FINISH);
+    inflateEnd(&z);
+    if (code != Z_STREAM_END || z.total_out != size)
+      goto done;
+  }
+  error = STEAM_PREREQ_FILESYSTEM;
+  unlink(tmp);
+  if (!(out = fopen(tmp, "wb")))
+    goto done;
+  i = fwrite(plain, 1, size, out) == size && !fflush(out) &&
+      !fsync(fileno(out));
+  if (fclose(out) || !i) {
+    unlink(tmp);
+    goto done;
+  }
+  if (!hash(tmp, &wanted)) {
+    unlink(tmp);
+    error = STEAM_PREREQ_INTEGRITY;
+    goto done;
+  }
+  if (!steam_file_replace(tmp, target)) {
+    unlink(tmp);
+    goto done;
+  }
+  error = 0;
+done:
+  if (f)
+    fclose(f);
+  free(directory);
+  free(packed);
+  free(plain);
+  return error;
+}
+unsigned int steam_prereq_extract(const char *root, unsigned int arch,
+                                  const char *member, const char *target,
+                                  uint64_t size, const char *sha256) {
+  const struct steam_prereq_catalog *c = steam_prereq_catalog(arch);
+  char archive[512];
+  if (!c || !path(root, c->file, archive, 0))
+    return STEAM_PREREQ_PATH;
+  if (!hash(archive, c))
+    return STEAM_PREREQ_INTEGRITY;
+  return zip_member(archive, member, target, size, sha256);
+}
+void steam_prereq_discard(const char *root, unsigned int arch) {
+  const struct steam_prereq_catalog *c = steam_prereq_catalog(arch);
+  char p[512];
+  if (c && path(root, c->file, p, 0))
+    unlink(p);
 }
 static int save(const char *p, const char *text) {
   char tmp[520];
