@@ -2573,6 +2573,18 @@ static void commit_arm64ec_map( struct file_view *view )
 }
 
 #if defined(__SWITCH__) && defined(WINE_NX_FEX)
+/* Verbose runs: what became of each write trap FEX asked for, and each write that hit one. */
+static void trace_fex_smc( const char *what, const void *page, BYTE vprot, unsigned int status, const void *pc )
+{
+    extern int wine_nx_runtime_verbose __attribute__((weak));
+    extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
+    char line[112];
+
+    if (!&wine_nx_runtime_verbose || !wine_nx_runtime_verbose || !&wine_nx_runtime_trace) return;
+    snprintf( line, sizeof(line), "[FEX-SMC] %s %p vprot=%02x status=%08x pc=%p", what, page, vprot, status, pc );
+    wine_nx_runtime_trace( line );
+}
+
 NTSTATUS wine_nx_fex_protect_code( void *base, BOOL enable )
 {
     struct file_view *view;
@@ -2604,6 +2616,7 @@ NTSTATUS wine_nx_fex_protect_code( void *base, BOOL enable )
     }
 done:
     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+    trace_fex_smc( enable ? "trap" : "untrap", base, vprot, status, NULL );
     return status;
 }
 
@@ -5814,6 +5827,9 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
     void *addr = (void *)rec->ExceptionInformation[1];
     char *page = ROUND_ADDR( addr, host_page_mask );
     BYTE vprot;
+#ifdef __SWITCH__
+    BOOL smc_write = FALSE;
+#endif
 
     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
     vprot = get_host_page_vprot( page );
@@ -5844,6 +5860,7 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
         /* FEX must invalidate translated code before making this page writable. */
         rec->NumberParameters = 3;
         rec->ExceptionInformation[2] = STATUS_EXECUTABLE_MEMORY_WRITE;
+        smc_write = TRUE;
     }
 #endif
     else if (err == EXCEPTION_WRITE_FAULT)
@@ -5886,6 +5903,11 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
     }
 #endif
     mutex_unlock( &virtual_mutex );
+#if defined(__SWITCH__) && defined(WINE_NX_FEX)
+    if (smc_write) trace_fex_smc( "write", addr, vprot, ret, rec->ExceptionAddress );
+#elif defined(__SWITCH__)
+    (void)smc_write;
+#endif
     rec->ExceptionCode = ret;
     return ret;
 }

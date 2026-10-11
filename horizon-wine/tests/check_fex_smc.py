@@ -160,6 +160,7 @@ with tempfile.TemporaryDirectory(prefix='fex-smc-') as directory:
     path = Path(directory)
     (path / 'smc.c').write_text(fixture + function(vm, 'static int get_unix_prot(') +
                               function(host, 'int horizon_protect_fex_page(') +
+                              function(vm, 'static void trace_fex_smc(') +
                               function(vm, 'NTSTATUS wine_nx_fex_protect_code(') + tests)
     cc = os.environ.get('WINE_NX_HOST_CC', '/usr/bin/clang')
     subprocess.run([cc, '-Wall', '-Wextra', '-Werror', '-pthread', '-fsanitize=address,undefined',

@@ -1512,7 +1512,7 @@ index 0000000..46d7057
 +}
 +}
 diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
-index 155403d..d3f1e75 100644
+index 155403d..b0c3c81 100644
 --- a/Source/Windows/Common/InvalidationTracker.cpp
 +++ b/Source/Windows/Common/InvalidationTracker.cpp
 @@ -9,6 +9,9 @@
@@ -1525,19 +1525,22 @@ index 155403d..d3f1e75 100644
  
  namespace FEX::Windows {
  InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads)
-@@ -16,6 +19,11 @@ InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const s
+@@ -16,6 +19,14 @@ InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const s
    , Threads {Threads} {
    FEX_CONFIG_OPT(SMCChecks, SMCCHECKS);
    SMCDetectionDisabled = (SMCChecks == FEXCore::Config::CONFIG_SMC_NONE);
 +#ifdef FEX_HORIZON
 +  // Cached translations do not record whether individual pages could be trapped.
-+  PermissionSMC = SMCChecks == FEXCore::Config::CONFIG_SMC_MTRACK &&
++  // Write traps stay off: a block restarted after a trap on its own page has been seen to continue at a wrong
++  // address (the unpacker of a packed DLL), while validating each block of writable code runs the same DLL.
++  static constexpr bool WriteTraps = false;
++  PermissionSMC = WriteTraps && SMCChecks == FEXCore::Config::CONFIG_SMC_MTRACK &&
 +                  !FEXCore::Config::Get_DISKCACHE() && !FEXCore::Config::Get_ENABLECODECACHINGWIP();
 +#endif
  
    MEMORY_BASIC_INFORMATION Info;
    uint64_t Address = 0;
-@@ -120,6 +128,11 @@ void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
+@@ -120,6 +131,11 @@ void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
      }
    } else {
      for (const auto& Interval : DEPPromotedIntervals) {
@@ -1549,7 +1552,7 @@ index 155403d..d3f1e75 100644
        XIntervals.Remove(Interval);
        RWXIntervals.Remove(Interval);
      }
-@@ -189,6 +202,9 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
+@@ -189,6 +205,9 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
      std::unique_lock Lock(IntervalsLock);
      XIntervals.Remove({SectionBase, SectionBase + SectionSize});
      RWXIntervals.Remove({SectionBase, SectionBase + SectionSize});
@@ -1559,7 +1562,7 @@ index 155403d..d3f1e75 100644
    }
  
    return {SectionBase, SectionSize};
-@@ -209,6 +225,9 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
+@@ -209,6 +228,9 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
      std::unique_lock Lock(IntervalsLock);
      XIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
      RWXIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
@@ -1569,7 +1572,7 @@ index 155403d..d3f1e75 100644
    }
  }
  
-@@ -233,10 +252,14 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
+@@ -233,10 +255,14 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
        InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
  
        // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
@@ -1585,7 +1588,7 @@ index 155403d..d3f1e75 100644
      }
      DetectMonoBackpatcherBlock(Thread, HostPc);
      return true;
-@@ -256,6 +279,14 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
+@@ -256,6 +282,14 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
    }
    const auto RWXResult = RWXIntervals.Query(Address);
    if (RWXResult.Enclosed) {
@@ -1600,7 +1603,7 @@ index 155403d..d3f1e75 100644
      return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, true};
    } else if (RWXResult.Size && RWXResult.Size < XResult.Size) {
      return {XResult.Interval.Offset, RWXResult.Interval.Offset - XResult.Interval.Offset, false};
-@@ -302,10 +333,16 @@ void InvalidationTracker::DisableSMCDetection() {
+@@ -302,10 +336,16 @@ void InvalidationTracker::DisableSMCDetection() {
    do {
      Query = RWXIntervals.Query(Address);
      if (Query.Enclosed) {
@@ -1617,7 +1620,7 @@ index 155403d..d3f1e75 100644
      }
      Address += Query.Size;
    } while (Query.Size);
-@@ -339,6 +376,10 @@ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, uin
+@@ -339,6 +379,10 @@ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, uin
  }
  
  bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t Size, bool ForWriteLocked) {
@@ -1628,7 +1631,7 @@ index 155403d..d3f1e75 100644
    const auto End = Address + Size;
    std::shared_lock Lock(IntervalsLock);
  
-@@ -360,10 +401,16 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
+@@ -360,10 +404,16 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
          }
          HitRWXInterval = true;
        }
@@ -1645,7 +1648,7 @@ index 155403d..d3f1e75 100644
      } else if (!Query.Size) {
        // No more regions past `Address` in the interval list
        break;
-@@ -375,4 +422,24 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
+@@ -375,4 +425,24 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
    return HitRWXInterval;
  }
  
@@ -1779,10 +1782,24 @@ index ded646b..a37f3b9 100644
  #endif
    if (Status) {
 diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
-index 62a8dd2..5847633 100644
+index 62a8dd2..26f5184 100644
 --- a/Source/Windows/WOW64/Module.cpp
 +++ b/Source/Windows/WOW64/Module.cpp
-@@ -546,6 +546,9 @@ void BTCpuProcessInit() {
+@@ -139,7 +139,13 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
+ std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
+ std::optional<FEX::Windows::ImageTracker> ImageTracker;
+ 
++#ifdef FEX_HORIZON
++// The memory notifications hold this across the system call they bracket. When that call stores a result in a page
++// trapped for self-modifying code, the write fault is handled on the same thread, which locks this again.
++std::recursive_mutex ThreadCreationMutex;
++#else
+ std::mutex ThreadCreationMutex;
++#endif
+ // Map of TIDs to their FEX thread state, `ThreadCreationMutex` must be locked when accessing
+ std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*> Threads;
+ 
+@@ -546,6 +552,9 @@ void BTCpuProcessInit() {
  
    FEX::Windows::Allocator::SetupHooks(NtDll);
    FEX::Windows::UnixLib::Init(NtDll);
@@ -1792,7 +1809,7 @@ index 62a8dd2..5847633 100644
    if (FEX::Windows::UnixLib::Available()) {
      FEXCore::DiskCache::SetFileMapper(FEX::Windows::UnixLib::MapFile);
    }
-@@ -573,7 +576,9 @@ void BTCpuProcessInit() {
+@@ -573,7 +582,9 @@ void BTCpuProcessInit() {
    // Allocate the syscall/unixcall trampolines in the lower 2GB of the address space
    SIZE_T Size = 4;
    void* Addr = nullptr;
@@ -1803,7 +1820,7 @@ index 62a8dd2..5847633 100644
    InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Addr), Size, PAGE_EXECUTE);
    *reinterpret_cast<uint32_t*>(Addr) = 0x2ecd2ecd;
    BridgeInstrs::Syscall = Addr;
-@@ -583,6 +588,9 @@ void BTCpuProcessInit() {
+@@ -583,6 +594,9 @@ void BTCpuProcessInit() {
    if (Sym) {
      WineUnixCall = *reinterpret_cast<decltype(WineUnixCall)*>(Sym);
    }
@@ -1813,7 +1830,7 @@ index 62a8dd2..5847633 100644
  
    FEX::Windows::SetupEnvironmentVariableValues(NtDll);
  
-@@ -607,6 +615,9 @@ void BTCpuProcessTerm(HANDLE Handle, BOOL After, ULONG Status) {}
+@@ -607,6 +621,9 @@ void BTCpuProcessTerm(HANDLE Handle, BOOL After, ULONG Status) {}
  
  void BTCpuThreadInit() {
    static constexpr size_t DefaultWow64CS {4};
@@ -1823,7 +1840,7 @@ index 62a8dd2..5847633 100644
    std::scoped_lock Lock(ThreadCreationMutex);
    FEX::Windows::InitCRTThread();
    auto* Thread = CTX->CreateThread();
-@@ -660,11 +671,14 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -660,11 +677,14 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
    bool Self = ThreadTID == GetCurrentThreadId();
    if (!Self) {
      // If we are suspending a thread that isn't ourselves, try to suspend it first so we know internal JIT locks aren't being held.
@@ -1839,7 +1856,7 @@ index 62a8dd2..5847633 100644
      return;
    }
  
-@@ -673,6 +687,7 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -673,6 +693,7 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
      auto it = Threads.find(ThreadTID);
      if (it == Threads.end()) {
        // Thread already terminated
@@ -1847,7 +1864,7 @@ index 62a8dd2..5847633 100644
        return;
      }
  
-@@ -690,6 +705,7 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -690,6 +711,7 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
  
    FEX::Windows::CallRetStack::DestroyThread(ThreadState);
    CTX->DestroyThread(ThreadState);
@@ -1855,7 +1872,7 @@ index 62a8dd2..5847633 100644
    if (Self) {
      FEX::Windows::DeinitCRTThread();
    }
-@@ -838,7 +854,10 @@ NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG* Count) {
+@@ -838,7 +860,10 @@ NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG* Count) {
      ULONG TmpProt;
      void* TmpAddress = &TLS.ThreadState()->InterruptFaultPage;
      SIZE_T TmpSize = FEXCore::Utils::FEX_PAGE_SIZE;
@@ -1867,7 +1884,7 @@ index 62a8dd2..5847633 100644
    }
  
    // Spin until the JIT is interrupted
-@@ -856,12 +875,18 @@ NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG* Count) {
+@@ -856,12 +881,18 @@ NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG* Count) {
  
    // NtSuspendThread may return before the thread is actually suspended, so a sync operation like NtGetContextThread
    // needs to be called to ensure it is before we unset CONTROL_PAUSED
@@ -1887,7 +1904,7 @@ index 62a8dd2..5847633 100644
        return Err;
      }
    }
-@@ -881,12 +906,13 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+@@ -881,12 +912,13 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
    auto* Exception = Ptrs->ExceptionRecord;
    auto TLS = GetTLS();
    auto Thread = TLS.ThreadState();
@@ -1903,7 +1920,7 @@ index 62a8dd2..5847633 100644
        return true;
      }
  
-@@ -894,6 +920,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+@@ -894,6 +926,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
        return true;
      }
  
@@ -1911,7 +1928,7 @@ index 62a8dd2..5847633 100644
      if (Context::HandleSuspendInterrupt(TLS, Context, FaultAddress)) {
        LogMan::Msg::DFmt("Resumed from suspend");
        return true;
-@@ -907,7 +934,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+@@ -907,7 +940,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
      if (Thread) {
        std::scoped_lock Lock(ThreadCreationMutex);
        FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
@@ -1920,7 +1937,7 @@ index 62a8dd2..5847633 100644
          if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
              CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
            Context::ReconstructThreadState(TLS, Context);
-@@ -1036,6 +1063,17 @@ void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After,
+@@ -1036,6 +1069,17 @@ void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After,
    if (!InvalidationTracker || !ThreadState) {
      return;
    }

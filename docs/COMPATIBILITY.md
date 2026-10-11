@@ -8,6 +8,7 @@ Evidence is taken from the project's recorded checks, not new tests performed wh
 | Fallout 3 | Launcher and main menu reached | Final 0.2; gameplay not checked. Use Fallout3Launcher.exe; its PLAY button needs the cursor |
 | Catlateral Damage | Main menu reached | Earlier development builds |
 | Dishonored | Intro and main menu reached, about 24 FPS in the menu | Final 0.2; gameplay not checked. Crashes observed in earlier builds with TSO disabled |
+| Assassin's Creed (Steam) | Starts through its Steam-wrapped launcher; intro video reached | 0.3e; menu and gameplay not checked |
 | Library and Steam uninstalled tab | Opened successfully | Final 0.2 |
 
 These are limited observations, not a list of fully playable games.
@@ -34,7 +35,7 @@ These are limits of running a game without the Steam client, not faults of a par
 - Only Microsoft Visual C++ 2015-2022 is added automatically. Older Visual C++ runtimes, DirectX helper libraries, .NET and XNA are named as missing but not installed.
 - The Windows components are downloaded from the upstream project's DLL repository, at one fixed revision that this version was tested with. If that repository goes away, a new installation cannot complete First set-up.
 - First set-up and a few older screens are in English only.
-- Legacy Steam titles need Valve's own `Steam.dll`. It is not in the package; since 0.3b CorkDeck downloads it from Valve's update server the first time such a game is started (not yet exercised on a console).
+- Legacy Steam titles need Valve's own `Steam.dll`. It is not in the package; since 0.3b CorkDeck downloads it from Valve's update server the first time such a game is started (exercised on a console with 0.3e).
 - Since 0.3b a Steam game is installed from the file sets the account is licensed for, and files of 4 GiB and more are written as multi-part files. The first was checked on a console; no game with a file that large has been installed on one yet.
 - Automatic CorkDeck updates are unavailable.
 

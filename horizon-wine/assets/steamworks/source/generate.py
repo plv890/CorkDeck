@@ -63,6 +63,7 @@ def body(family, ret, name, args):
         if name in ('GetCurrentGameLanguage', 'GetAvailableGameLanguages'): return 'return game_language;'
         if name == 'GetAppOwner': return 'return account;' if ret == 'uint64_steamid' else 'return CSteamID(account);'
         if name == 'GetAppBuildId': return 'return 0;'
+        if name == 'GetAppInstallDir': return 'return install_dir(' + ','.join(a) + ');'
     if family == 'friends':
         if name == 'GetPersonaName': return 'return "Autorun";'
         if name == 'GetPersonaState': return 'return k_EPersonaStateOffline;'

@@ -13,12 +13,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const struct { const char *name,*hash,*previous_hashes[7]; size_t size; unsigned machine; } payloads[] = {
-    {"steam_api.dll","916e26cb3786d2a3f74b36ae31f6e5997ae227fa6120e33b5f57c1cf3e95326c",{"9f142b8b5d915026907231635f3e9495fdbbcad139df967ac67ac0f1de1dbbb6","6c07b437415e6a36ef28a0b5a0b738469071b527a848e6fd9ae852d92daa0436","8de20d1249db83aca4236ce9b1ee685e7507b50d8f5b934125bd07e3039cd648","e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe","d9aec7f1d5452d142ba1a6eb9ffa709f2e53caa93c0e8ede5ecc562d7a24f9f7","8e9087f2156aa7397e70b12cf87204123e72b4d18448e77e06dacaa3d7b49331","bc87cd5f712fc8d65ff06e69ac26ce450aec6daa435f2894934fbc5630bad155"},586752,0x14c},
-    {"steam_api64.dll","667ff936d43d858d8690f0192dd8583be1a02b7fae152efa612f796e2db12ef7",{"02b2f2c7ac99b2ef2cbc6601882f43faefeb2812dd02b0004c5dc4ec5fb56197","e1c6aff3f88086fda769fe074b514f3ce8e01aa027515fda62d16739cd5a6fb7","dc061d912d5ce3933793002a2cd2e2391329768a3887eda724756f9e22a442e0","0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623","fa96bd051b9c74ebb753f786309dbbfb3a9e7c9236ad430bbc8869eb3f1e7010","d7bbb6abee6796742267cff9ed515b548864347e3700c60f8c337082c526c02e","a246cee2c9119ff901ed195e421470cdf3f14fc277ebc506aca8754444be8d6f"},585216,0x8664}
+static const struct { const char *name,*hash,*previous_hashes[9]; size_t size; unsigned machine; } payloads[] = {
+    {"steam_api.dll","5fad9bfc8331c84a22af5631dff2656d78319a6746633e5b5bda1ca4cbc15d29",{"1260113ec622176e563bda3b077570008b1d9a1e086b9bc9fecdc86e4e51a2b3","916e26cb3786d2a3f74b36ae31f6e5997ae227fa6120e33b5f57c1cf3e95326c","9f142b8b5d915026907231635f3e9495fdbbcad139df967ac67ac0f1de1dbbb6","6c07b437415e6a36ef28a0b5a0b738469071b527a848e6fd9ae852d92daa0436","8de20d1249db83aca4236ce9b1ee685e7507b50d8f5b934125bd07e3039cd648","e5aa414897739634065da8f88595cb32543b95eafe62b508fa42c646ba0b8abe","d9aec7f1d5452d142ba1a6eb9ffa709f2e53caa93c0e8ede5ecc562d7a24f9f7","8e9087f2156aa7397e70b12cf87204123e72b4d18448e77e06dacaa3d7b49331","bc87cd5f712fc8d65ff06e69ac26ce450aec6daa435f2894934fbc5630bad155"},596992,0x14c},
+    {"steam_api64.dll","f45dc3813465b69fec33b4a02ace851cfa3c10d2a399ec73f10c30857768c109",{"0564402e82e2844afb7fcc7a2dd8cde67226415207ded7a2a98401e37ef63467","667ff936d43d858d8690f0192dd8583be1a02b7fae152efa612f796e2db12ef7","02b2f2c7ac99b2ef2cbc6601882f43faefeb2812dd02b0004c5dc4ec5fb56197","e1c6aff3f88086fda769fe074b514f3ce8e01aa027515fda62d16739cd5a6fb7","dc061d912d5ce3933793002a2cd2e2391329768a3887eda724756f9e22a442e0","0503fc69e9ea089a59544b2279927215d5e15f0f9cdbb5988b41d76b7a323623","fa96bd051b9c74ebb753f786309dbbfb3a9e7c9236ad430bbc8869eb3f1e7010","d7bbb6abee6796742267cff9ed515b548864347e3700c60f8c337082c526c02e","a246cee2c9119ff901ed195e421470cdf3f14fc277ebc506aca8754444be8d6f"},586240,0x8664}
 };
 static int previous_payload(unsigned index,const char *hash) {
-    for(unsigned i=0;i<7;++i)if(!strcmp(hash,payloads[index].previous_hashes[i]))return 1;
+    for(unsigned i=0;i<9;++i)if(!strcmp(hash,payloads[index].previous_hashes[i]))return 1;
     return 0;
 }
 static int join(char out[1024],const char *base,const char *leaf) {
@@ -70,6 +70,10 @@ extern const unsigned char corkdeck_steam_api[] __attribute__((weak));
 extern const size_t corkdeck_steam_api_size __attribute__((weak));
 extern const unsigned char corkdeck_steam_api64[] __attribute__((weak));
 extern const size_t corkdeck_steam_api64_size __attribute__((weak));
+/* The same library in its client flavour, for a program that looks for a running
+ * Steam client (assets/steamworks/steamclient-local.dll, same source). */
+extern const unsigned char corkdeck_steam_client[] __attribute__((weak));
+extern const size_t corkdeck_steam_client_size __attribute__((weak));
 static int carried(const char *folder,const char *payload,unsigned index) {
     const unsigned char *data=index?corkdeck_steam_api64:corkdeck_steam_api;
     const size_t *size=index?&corkdeck_steam_api64_size:&corkdeck_steam_api_size;
@@ -239,10 +243,25 @@ int steam_legacy_program(const char *executable) {
     }
     free(bytes);fclose(f);return found;
 }
+#define STEAM_CLIENT_LOCAL_SIZE 636416u
+/* The client flavour on the card is not this build's: the carried one is written
+ * in its place, as the library is. */
+static int legacy_carried(const char *root,const char *provider,const char *client,size_t size,const char *hash) {
+    char parent[1024],temporary[1100];FILE *out;int ok;
+    if(!corkdeck_steam_client||!&corkdeck_steam_client_size||corkdeck_steam_client_size!=size)return 0;
+    if(!join(parent,root,"steamworks-local"))return 0;
+    if((mkdir(parent,0777)&&errno!=EEXIST)||(mkdir(provider,0777)&&errno!=EEXIST))return 0;
+    snprintf(temporary,sizeof(temporary),"%s.corkdeck-part",client);
+    if(kind(temporary)<0||!(out=fopen(temporary,"wb")))return 0;
+    ok=fwrite(corkdeck_steam_client,1,size,out)==size&&!fflush(out)&&!fsync(fileno(out));
+    if(fclose(out))ok=0;
+    if(!ok||!steam_file_replace(temporary,client)){unlink(temporary);return 0;}
+    return legacy_matches(client,size,hash);
+}
 int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
                          struct steam_legacy_context *context) {
     static const char steam_hash[]=STEAM_LEGACY_DLL_SHA256;
-    static const char client_hash[]="65c11224b38272d06537f2c90dcc111127335fa563c089e97133e602f42fee87";
+    static const char client_hash[]="04eff5c1e3efcedbef89b6824de810e4066744c1ac55dcc936ea1b28503bbc17";
     char directory[1024],base[1024],marker[1024],line[256],provider[1024],client[1024];
     char source[1024],target[1024],temp[1100],settings[1024],install_dos[256];
     uint64_t app=0,owner=0;int registered=0,optin=0,optout=0,invalid=0,seen_app=0,seen_owner=0;
@@ -287,7 +306,8 @@ int steam_legacy_prepare(const char *root,const char *executable,unsigned arch,
        !join(provider,root,"steamworks-local/legacy-client")||
        !join(client,provider,"steamclient-local.dll")||
        !launcher_dos_path(client,context->client_dos_path,sizeof(context->client_dos_path)))return STEAM_LOCAL_CONFLICT;
-    if(!legacy_matches(client,1241600,client_hash)||!join(source,provider,"Steam.dll")||
+    if((!legacy_matches(client,STEAM_CLIENT_LOCAL_SIZE,client_hash)&&
+        !legacy_carried(root,provider,client,STEAM_CLIENT_LOCAL_SIZE,client_hash))||!join(source,provider,"Steam.dll")||
        !legacy_matches(source,STEAM_LEGACY_DLL_SIZE,steam_hash)){
         memset(context,0,sizeof(*context));return STEAM_LOCAL_PAYLOAD_MISSING;
     }

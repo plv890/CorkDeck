@@ -21,13 +21,14 @@ static bool screenshots_hooked;
 static uint32 appid;
 static uint64 account;
 static uintptr_t generation=1;
-static char directory[MAX_PATH], config[MAX_PATH], save_root[MAX_PATH];
+static char directory[MAX_PATH], config[MAX_PATH], save_root[MAX_PATH], install_root[MAX_PATH];
 static char game_language[32]="english", ui_language[32]="english";
 static HMODULE module;
 static CRITICAL_SECTION mutex;
 static constexpr uint64 quota = 64u*1024u*1024u;
 static constexpr uint32 max_file = 16u*1024u*1024u;
 static void *lookup(const char *);
+static uint32 install_dir(AppId_t,char *,uint32);
 static EUserHasLicenseForAppResult owns_license(uint64 user,uint32 game) {
     return ready && user==account && game==appid ? k_EUserHasLicenseResultHasLicense : k_EUserHasLicenseResultDoesNotHaveLicense;
 }
@@ -36,6 +37,17 @@ struct Guard { Guard(){ EnterCriticalSection(&mutex); } ~Guard(){ LeaveCriticalS
 
 static bool ini(const char *key, char *out, unsigned size) {
     return GetPrivateProfileStringA("autorun",key,"",out,size,config)>0;
+}
+/* The game and its owner, as the launcher wrote them beside this library. */
+static bool configured(uint32 *game,uint64 *owner) {
+    char value[128],*end;
+    if (!ini("app_id",value,sizeof(value))) return false;
+    unsigned long id=strtoul(value,&end,10);
+    if (*end || !id || id>UINT32_MAX) return false;
+    if (!ini("steam_id",value,sizeof(value))) return false;
+    unsigned long long user=strtoull(value,&end,10);
+    if (*end || !user) return false;
+    *game=(uint32)id; *owner=user; return true;
 }
 static bool initialize() {
     Guard guard;
@@ -49,15 +61,10 @@ static bool initialize() {
             if(selected[0]&&!strchr(selected,'|')&&strstr(supported,token))strcpy(outputs[i],selected);
         }
     }
-    char value[128];
-    if (!ini("app_id",value,sizeof(value))) return false;
-    char *end; unsigned long id=strtoul(value,&end,10);
-    if (*end || !id || id>UINT32_MAX) return false;
-    appid=(uint32)id;
-    if (!ini("steam_id",value,sizeof(value))) return false;
-    account=strtoull(value,&end,10);
-    if (*end || !account) return false;
+    if (!configured(&appid,&account)) return false;
     // Both keys are generated for a verified owned installation, never tokens.
+    // Where the game is installed, when the launcher says: the client flavour is asked for it.
+    if (!ini("install_dir",install_root,sizeof(install_root))) install_root[0]=0;
     snprintf(save_root,sizeof(save_root),"%s\\autorun-steam-local",directory);
     if (!CreateDirectoryA(save_root,nullptr) && GetLastError()!=ERROR_ALREADY_EXISTS) return false;
     snprintf(save_root,sizeof(save_root),"%s\\autorun-steam-local\\%llu",directory,(unsigned long long)account);
@@ -201,9 +208,20 @@ static bool request_stats() {
 #define ABI_THISCALL
 #endif
 #include "interfaces.inc"
-static void *lookup(const char *version) {
+static void *lookup_known(const char *version) {
     if(!ready || !version)return nullptr;
     #include "lookup.inc"
+}
+/* What a program asked for and was not given is worth a line: it is why it stops. */
+static void *lookup(const char *version) {
+    void *found=lookup_known(version);
+    if(!found&&ready&&version)fprintf(stderr,"[STEAM LOCAL] interface %.80s is not provided\n",version);
+    return found;
+}
+static uint32 install_dir(AppId_t id,char *out,uint32 size) {
+    Guard guard;if(out&&size)out[0]=0;
+    if(!ready||id!=appid||!out||!install_root[0]||strlen(install_root)>=size)return 0;
+    strcpy(out,install_root);return (uint32)strlen(out)+1;
 }
 static void *legacy(const char *key,const char *fallback) {
     char version[128]; return lookup(ini(key,version,sizeof(version))?version:fallback);
@@ -214,7 +232,9 @@ S_API_EXPORT steam_bool S_CALLTYPE SteamAPI_InitSafe(){return initialize();}
 S_API_EXPORT void S_CALLTYPE SteamAPI_Shutdown(){Guard g; ready=false;screenshots_hooked=false;++generation;for(auto&r:registrations)if(!r.call)CCallbackMgr::unregister_callback(r.ptr);registrations.clear();results.clear();}
 S_API_EXPORT HSteamUser S_CALLTYPE SteamAPI_GetHSteamUser(){return ready?1:0;}
 S_API_EXPORT HSteamPipe S_CALLTYPE SteamAPI_GetHSteamPipe(){return ready?1:0;}
-S_API_EXPORT steam_bool S_CALLTYPE SteamAPI_IsSteamRunning(){return ready;}
+/* Asked before SteamAPI_Init as often as after it: a game that finds no client
+ * running never calls Init at all. The answer is whether Init would succeed. */
+S_API_EXPORT steam_bool S_CALLTYPE SteamAPI_IsSteamRunning(){uint32 game;uint64 owner;return ready||configured(&game,&owner);}
 /* True tells the game to quit because Steam is starting it again. A game the
  * Steam client started is always answered false, whatever number it passes:
  * the stock Steamworks.NET manager passes no AppID at all, and a demo or an
@@ -285,6 +305,51 @@ S_API_EXPORT void S_CALLTYPE SteamAPI_RunCallbacks(){
 }
 S_API_EXPORT ESteamAPIInitResult S_CALLTYPE SteamAPI_InitFlat(SteamErrMsg*msg){if(msg)(*msg)[0]=0;return initialize()?k_ESteamAPIInitResult_OK:k_ESteamAPIInitResult_FailedGeneric;}
 S_API_EXPORT ESteamAPIInitResult S_CALLTYPE SteamInternal_SteamAPI_Init(const char*,SteamErrMsg*msg){return SteamAPI_InitFlat(msg);}
+#ifdef AUTORUN_LOCAL_CLIENT_ADAPTER
+/* Built as steamclient-local.dll: the library a program finds through the
+ * registry where it expects the running Steam client, and asks for ISteamClient
+ * in the version it was built with. No client process, pipe or network is behind it. */
+S_API_EXPORT const char *__cdecl AutorunLocalClientAdapterRole(){return "autorun-local-offline-client-adapter-v2";}
+S_API_EXPORT void *__cdecl CreateInterface(const char *version,int *code){
+    void *found=initialize()?lookup(version):nullptr;
+    if(code)*code=found?0:1;
+    fprintf(stderr,"[STEAM LOCAL] client asked for %.80s: %s\n",version?version:"(null)",found?"given":"refused");
+    return found;
+}
+/* What Valve's client library exports by name beside CreateInterface. A program
+ * that carries its own copy of the start-up code (an old steam_api.dll, a
+ * wrapped program) looks these up in whatever library the registry names, and
+ * one it does not find is a call through a null pointer. They answer as the
+ * interfaces do: one pipe, one user, nothing waiting to be delivered. */
+static ISteamClient *flat_client(){return initialize()?(ISteamClient*)lookup_known(STEAMCLIENT_INTERFACE_VERSION):nullptr;}
+static ISteamUser *flat_user(){return initialize()?(ISteamUser*)lookup_known(STEAMUSER_INTERFACE_VERSION):nullptr;}
+S_API_EXPORT HSteamPipe __cdecl Steam_CreateSteamPipe(){auto*c=flat_client();return c?c->CreateSteamPipe():0;}
+S_API_EXPORT steam_bool __cdecl Steam_BReleaseSteamPipe(HSteamPipe pipe){auto*c=flat_client();return c&&c->BReleaseSteamPipe(pipe);}
+S_API_EXPORT HSteamUser __cdecl Steam_ConnectToGlobalUser(HSteamPipe pipe){auto*c=flat_client();return c?c->ConnectToGlobalUser(pipe):0;}
+S_API_EXPORT HSteamUser __cdecl Steam_CreateGlobalUser(HSteamPipe *pipe){
+    auto*c=flat_client();if(!c||!pipe)return 0;
+    *pipe=c->CreateSteamPipe();return *pipe?c->ConnectToGlobalUser(*pipe):0;
+}
+S_API_EXPORT HSteamUser __cdecl Steam_CreateLocalUser(HSteamPipe *pipe,EAccountType type){auto*c=flat_client();return c&&pipe?c->CreateLocalUser(pipe,type):0;}
+S_API_EXPORT void __cdecl Steam_ReleaseUser(HSteamPipe pipe,HSteamUser user){auto*c=flat_client();if(c)c->ReleaseUser(pipe,user);}
+S_API_EXPORT steam_bool __cdecl Steam_BGetCallback(HSteamPipe,CallbackMsg_t*){return false;}
+S_API_EXPORT void __cdecl Steam_FreeLastCallback(HSteamPipe){}
+S_API_EXPORT steam_bool __cdecl Steam_GetAPICallResult(HSteamPipe,SteamAPICall_t call,void *data,int size,int id,bool *failed){return result_copy(call,data,size,id,failed);}
+S_API_EXPORT steam_bool __cdecl Steam_BLoggedOn(HSteamUser,HSteamPipe){auto*u=flat_user();return u&&u->BLoggedOn();}
+S_API_EXPORT steam_bool __cdecl Steam_BConnected(HSteamUser,HSteamPipe){auto*u=flat_user();return u&&u->BLoggedOn();}
+S_API_EXPORT void __cdecl Steam_LogOn(HSteamUser,HSteamPipe,uint64){}
+S_API_EXPORT void __cdecl Steam_LogOff(HSteamUser,HSteamPipe){}
+S_API_EXPORT void __cdecl Steam_SetLocalIPBinding(uint32,uint16){}
+S_API_EXPORT void __cdecl Steam_ReleaseThreadLocalMemory(steam_bool){}
+S_API_EXPORT void __cdecl Steam_TerminateGameConnection(HSteamUser,HSteamPipe,uint32,uint16){}
+S_API_EXPORT steam_bool __cdecl Steam_IsKnownInterface(const char *version){return initialize()&&lookup_known(version);}
+S_API_EXPORT void __cdecl Steam_NotifyMissingInterface(HSteamPipe,const char *version){fprintf(stderr,"[STEAM LOCAL] the program reports interface %.80s missing\n",version?version:"(null)");}
+S_API_EXPORT void __cdecl Breakpad_SteamMiniDumpInit(uint32,const char*,const char*){}
+S_API_EXPORT void __cdecl Breakpad_SteamSetAppID(uint32){}
+S_API_EXPORT void __cdecl Breakpad_SteamSetSteamID(uint64){}
+S_API_EXPORT void __cdecl Breakpad_SteamWriteMiniDumpSetComment(const char*){}
+S_API_EXPORT void __cdecl Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildNumber(uint32,void*,uint32){}
+#endif
 }
 #include "flat.inc"
 BOOL WINAPI DllMain(HINSTANCE instance,DWORD reason,void*) {

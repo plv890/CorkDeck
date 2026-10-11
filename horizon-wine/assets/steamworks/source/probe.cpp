@@ -66,10 +66,13 @@ int main(int argc,char**argv){
     CHECK(init&&shutdown&&lookup&&pump&&reg&&unreg&&context);
     auto restart=symbol<bool(*)(uint32)>(h,"SteamAPI_RestartAppIfNecessary");
     CHECK(restart&&!restart(0)&&!restart(480)&&!restart(22300)); // Never asks the game to quit.
+    auto running=symbol<bool(*)()>(h,"SteamAPI_IsSteamRunning");
+    CHECK(running&&!running());
     CHECK(!init()); // Missing account/AppID configuration must fail.
     FILE*f=fopen("autorun-steam.ini","wb");CHECK(f);
     fputs("[autorun]\napp_id=480\nsteam_id=76561198000000000\nlanguage=russian\nui_language=german\n",f);fclose(f);
-    CHECK(init());CHECK(!lookup("UnknownInterface999"));
+    CHECK(running()); // A game may ask this first and never call Init on "no".
+    CHECK(init());CHECK(running());CHECK(!lookup("UnknownInterface999"));
     auto *language_apps=(ISteamApps*)lookup(STEAMAPPS_INTERFACE_VERSION);CHECK(language_apps);
     auto *language_utils=(ISteamUtils*)lookup(STEAMUTILS_INTERFACE_VERSION);CHECK(language_utils);
     CHECK(!strcmp(language_apps->GetCurrentGameLanguage(),"russian"));

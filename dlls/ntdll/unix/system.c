@@ -1630,6 +1630,39 @@ end:
     return nt_status;
 }
 
+#elif defined(__SWITCH__)
+
+/* The console's processor is always the same: one package of Cortex-A57 cores, one thread
+ * each, with their own level 1 caches and one level 2 cache between them. The count is the
+ * one the program is shown elsewhere. Without this, anything that asks for the topology
+ * first -- Microsoft's Concurrency Runtime does -- gets no answer and gives up. */
+static NTSTATUS create_logical_proc_info(void)
+{
+    CACHE_DESCRIPTOR l1d = { .Level = 1, .Associativity = 2, .LineSize = 64, .Size = 32 * 1024, .Type = CacheData };
+    CACHE_DESCRIPTOR l1i = { .Level = 1, .Associativity = 3, .LineSize = 64, .Size = 48 * 1024, .Type = CacheInstruction };
+    CACHE_DESCRIPTOR l2 = { .Level = 2, .Associativity = 16, .LineSize = 64, .Size = 2 * 1024 * 1024, .Type = CacheUnified };
+    unsigned int i, count = horizon_get_processor_count();
+    ULONG_PTR all;
+
+    if (!count || count >= 8 * sizeof(ULONG_PTR)) return STATUS_NOT_IMPLEMENTED;
+    all = ((ULONG_PTR)1 << count) - 1;
+    for (i = 0; i < count; i++)
+    {
+        ULONG_PTR mask = (ULONG_PTR)1 << i;
+
+        if (!logical_proc_info_add_by_id( RelationProcessorPackage, 0, mask ) ||
+            !logical_proc_info_add_by_id( RelationProcessorCore, i, mask ) ||
+            !logical_proc_info_add_cache( mask, &l1d ) ||
+            !logical_proc_info_add_cache( mask, &l1i ))
+            return STATUS_NO_MEMORY;
+    }
+    if (!logical_proc_info_add_cache( all, &l2 ) ||
+        !logical_proc_info_add_numa_node( all, 0 ) ||
+        !logical_proc_info_add_group( count, all ))
+        return STATUS_NO_MEMORY;
+    return STATUS_SUCCESS;
+}
+
 #else
 
 static NTSTATUS create_logical_proc_info(void)

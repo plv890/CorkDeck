@@ -1,0 +1,13 @@
+# CorkDeck 0.3e
+
+A quick update made from bug reports about Steam games that would not start. Installation and the main features are the same as in [0.3](RELEASE-0.3.md); to update, replace `switch/wine/wine-nx-runtime.nro` with the one from `CorkDeck-0.3e.zip`. It includes everything in [0.3b](RELEASE-0.3b.md) and [0.3c](RELEASE-0.3c.md). There was no public 0.3d.
+
+- **Programs that look for a running Steam client before they start now find one.** Such a program reads from the registry which process is the Steam client and where its library is, and goes on only when that process is alive. CorkDeck recorded the library and not the process, so the program decided Steam was not running and closed after a few seconds with no window and no message. This is what a user's log showed.
+- **The library CorkDeck gives a game in place of the Steam client is complete enough for programs of any age.** It answers in whichever version of the client interface the program asks for, not only the newest; it has the functions Valve's client library exports by name, which older programs call directly; and it is built from the same source as the Steam API library. It is carried inside the application now and written to the card when needed, so the package no longer holds it as a separate file.
+- **"Is Steam running?" is answered correctly before a game initialises Steam.** A game that asks first and initialises only on "yes" used to be told "no" and stopped with its own "could not connect to Steam" message.
+- **Programs that ask Windows for the processor's layout at start** (cores, caches) get an answer; some stopped at once with an error when the request was refused.
+- A request the Steam replacement cannot answer is written to the game's log by name, so a report shows what a game asked for.
+
+What this does not change: a game whose Steam wrapper checks that the client library carries Valve's digital signature still cannot start, and CorkDeck does not remove or bypass copy protection. See [Compatibility](COMPATIBILITY.md#games-known-not-to-run).
+
+What was checked: on a console, the games that ran on 0.3c were started again with the same result and the same frame rate, among them one that starts through a Steam-wrapped launcher and one that uses the Steam API library directly; a game stopped by the signature check stops there as before. The game named in the report is not owned by the maintainer, so that game itself could not be run: the cause was read from the user's log, and whether the game gets further now is not known until somebody who owns it tries. Host checks: 108 passed, 1 skipped, none failed.

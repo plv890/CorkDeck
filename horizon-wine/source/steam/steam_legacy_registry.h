@@ -1,6 +1,8 @@
 /* Factual local SDK provider registration in Autorun's owned Wine prefix.
  * Caller must opt in and verify the selected DLL hash/architecture/config first.
- * Uses real NT registry objects; never advertises a PID, account or auth state.
+ * Uses real NT registry objects; never advertises an account or auth state.
+ * The process recorded as the running client is the program's own: Steam's
+ * library takes a client for running only when that process is alive.
  * Invoke after PEB/environment initialization, before guest application entry. */
 #ifndef AUTORUN_STEAM_LEGACY_REGISTRY_H
 #define AUTORUN_STEAM_LEGACY_REGISTRY_H
@@ -103,6 +105,16 @@ static int steam_legacy_registry_register( const WCHAR *verified_path, NTSTATUS 
     status=NtSetValueKey(key,&name,0,REG_SZ,(void *)verified_path,(chars+1)*sizeof(WCHAR));
     if(!status)result=STEAM_LEGACY_REGISTRY_READY;
 done:
+    if(key && result==STEAM_LEGACY_REGISTRY_READY)
+    {
+        /* SteamAPI_Init reads "pid" first and opens that process; without a live
+         * one it reports that no Steam is running and never loads the library. */
+        static const WCHAR pid_name[]={'p','i','d',0};
+        DWORD pid=GetCurrentProcessId();
+        steam_legacy_registry_name(&name,pid_name);
+        status=NtSetValueKey(key,&name,0,REG_DWORD,&pid,sizeof(pid));
+        if(status)result=STEAM_LEGACY_REGISTRY_ERROR;
+    }
     if(key)NtClose(key);
     if(next)NtClose(next);
     if(failure && result==STEAM_LEGACY_REGISTRY_ERROR)*failure=status;
